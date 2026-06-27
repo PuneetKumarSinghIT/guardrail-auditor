@@ -32,18 +32,25 @@ jobs:
       - name: Run pytest with coverage
         run: |
           HAS_TESTS=false
+          TEST_DIRS=""
+          IGNORE_FLAGS=""
           for dir in scanner api ai-engine; do
             if [ -d "$dir/tests" ] && find "$dir/tests" -name "test_*.py" | grep -q .; then
               HAS_TESTS=true
+              TEST_DIRS="$TEST_DIRS $dir/"
+              # Ignore fixtures subdirs so binary files don't confuse pytest
+              if [ -d "$dir/tests/fixtures" ]; then
+                IGNORE_FLAGS="$IGNORE_FLAGS --ignore=$dir/tests/fixtures"
+              fi
             fi
           done
           if [ "$HAS_TESTS" = "true" ]; then
-            pytest scanner/ api/ ai-engine/ \
+            pytest $TEST_DIRS \
               --cov=src \
               --cov-fail-under=70 \
               --cov-report=term-missing \
               -v \
-              --ignore=scanner/tests/fixtures
+              $IGNORE_FLAGS
           else
             echo "No test files found yet — skipping (Phase 4+ will add them)"
           fi
