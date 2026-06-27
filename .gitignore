@@ -1,0 +1,76 @@
+# ── Node / TypeScript (CDK + Frontend) ───────────────────────
+node_modules/
+dist/
+build/
+.next/
+out/
+*.js.map
+*.d.ts.map
+
+# CDK
+cdk.out/
+cdk.context.json
+
+# ── Python (Lambda + scripts) ─────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+*.egg
+dist/
+.venv/
+venv/
+env/
+.env/
+pip-wheel-metadata/
+
+# Lambda build artifacts
+package/
+lambda.zip
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# ── Environment & secrets ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials
+
+# ── AWS ───────────────────────────────────────────────────────
+.aws/
+samconfig.toml
+
+# ── Docker ────────────────────────────────────────────────────
+.dockerignore
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDEs ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs & temp ───────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
