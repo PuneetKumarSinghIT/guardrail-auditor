@@ -1665,3 +1665,167 @@ When Claude reads this CLAUDE.md file, it MUST:
 well-crafted prompts) can build enterprise software. The prompts.md audit log IS the
 proof — every decision, every file, every fix is traceable. Treat it as the black box
 flight recorder for this build.
+
+---
+
+## TOKEN EFFICIENCY PROTOCOL — ALWAYS ACTIVE
+
+**Budget target: every phase completes within 3% of a 5-hour session and 0.5% of weekly limit.**
+
+This protocol is mandatory in every session, every response. It defines which model does what.
+Sonnet (the main conversation model) acts as the brain — judgment only.
+Haiku (subagents via Agent tool, `model="haiku"`) acts as the hands — all execution.
+
+---
+
+### SONNET DOES EXACTLY THESE 5 THINGS — NOTHING ELSE
+
+```
+1. SESSION START  : Read CLAUDE.md once → produce the Micro-Task List (see format below)
+2. TASK SPEC      : Write precise specs for each Haiku task (function sigs, exact logic, file path)
+3. DIAGNOSIS      : When Haiku reports a failure summary → decide the fix (one specific instruction)
+4. APPROVAL       : Review Haiku's result summary (< 200 words) → approve or give one correction
+5. FINAL SIGN-OFF : Confirm phase acceptance criteria are met based on Haiku's reported evidence
+```
+
+Sonnet never runs bash commands. Never reads files for verification. Never runs git or AWS CLI.
+Every tool call that touches the filesystem or network is delegated to Haiku.
+Sonnet ≤ 5 turns per phase. If a 6th turn is needed, something is wrong — diagnose why.
+
+---
+
+### HAIKU DOES EVERYTHING ELSE
+
+Haiku handles ALL of these — no exceptions:
+
+```
+FILE OPERATIONS    : Read files, Write files, Edit files, Glob, Grep
+SHELL COMMANDS     : All Bash/PowerShell — git add, git commit, git push, git status, git diff
+AWS CLI            : aws dynamodb, aws s3, aws ssm, aws cloudformation, aws lambda, aws sts
+CDK COMMANDS       : npx cdk synth, npx cdk deploy, npx cdk diff
+TEST RUNNER        : pytest, npm test, npm run build, vitest
+CI DATA COLLECTION : gh pr checks, gh run view --log-failed (fetch the log, extract only the error)
+LINTING            : cfn-lint, tfsec, checkov
+NPM                : npm ci, npm install, npm run build
+AUDIT LOG UPDATE   : Append prompts.md entry (last step of every response)
+CLAUDE.md UPDATES  : Update phase checklist [x] and SESSION TRACKER
+```
+
+---
+
+### MICRO-TASK LIST FORMAT (Sonnet produces this at session start)
+
+```
+PHASE N — [Phase Name]
+Sonnet budget: ≤ 5 turns | Haiku tasks: [count] | Independent groups: [A, B, C]
+
+PARALLEL GROUP A (spawn all at once — no dependencies between them):
+  H1. [WRITE|EDIT|READ|RUN] path/or/command
+      Spec: [exact function signature / exact command / exact old→new string]
+      Must: [specific correctness constraint]
+      Must not: [what to avoid]
+
+  H2. [WRITE|EDIT|READ|RUN] path/or/command
+      Spec: ...
+
+SEQUENTIAL (run after Group A completes):
+  H3. RUN: git add [files] && git commit -m "[message]" && git push
+  H4. RUN: gh pr create --base dev ...
+  H5. RUN: gh pr checks [num] --watch
+
+SONNET REVIEW GATE (Haiku sends summary, Sonnet approves or corrects):
+  - H1 result: [what Haiku reports about the file it wrote]
+  - H3 result: [commit hash + push confirmation]
+  - H5 result: [pass/fail per check]
+```
+
+---
+
+### HAIKU SPAWN FORMAT (copy-paste ready)
+
+```python
+Agent(
+  subagent_type="claude",
+  model="haiku",
+  description="[3-word task description]",
+  prompt="""
+TASK: [WRITE FILE | EDIT FILE | RUN COMMAND | READ AND REPORT]
+
+[For WRITE FILE:]
+File: [absolute path]
+Content requirements (implement exactly — no extras):
+  - [function sig + logic in 1-2 lines]
+  - [imports needed]
+  - [return type and shape]
+  - [edge cases to handle]
+Project rules:
+  - Python: logger.info(json.dumps({...})) — never print()
+  - Python: os.environ["VAR"] at module top — KeyError = fail fast
+  - CDK TypeScript: RemovalPolicy always DESTROY, env suffix on all names
+  - No comments unless non-obvious WHY
+  - No extra error handling for impossible cases
+Write the complete file. Report: filename + line count + key function names.
+
+[For RUN COMMAND:]
+Run: [exact command]
+Report back: [what output matters — exit code, specific line from output, etc.]
+
+[For READ AND REPORT:]
+Read: [file path, lines N-M if known]
+Report back: [exactly what Sonnet needs to make a decision — keep under 100 words]
+
+[For CI FAILURE:]
+Run: gh run view [run-id] --log-failed
+Extract: only lines containing ERROR, FAILED, ImportError, or the test function name
+Report: the error type + the exact failing line + filename:linenum
+Do NOT paste the full log.
+"""
+)
+```
+
+---
+
+### CI FAILURE TRIAGE PROTOCOL
+
+When a CI check fails, this is the exact sequence — no deviation:
+
+```
+Step 1 (Haiku): gh run view [run-id] --log-failed | grep -A 10 "ERROR\|FAILED\|Error\|assert"
+                Report to Sonnet: error type + file + line number (under 50 words)
+
+Step 2 (Sonnet): Diagnose root cause from the summary → produce ONE specific fix instruction
+
+Step 3 (Haiku): Implement the fix (edit file / run command) → commit → push
+                Report: what changed + new commit hash
+
+Step 4 (Haiku): gh pr checks [num] --watch → report final pass/fail per check
+
+Repeat only if still failing. Maximum 3 triage cycles before escalating to Sonnet for deeper read.
+```
+
+---
+
+### WHAT DEGRADES PERFORMANCE — NEVER DO THESE
+
+```
+✗ Sonnet reads a file "to understand it" before delegating — give Haiku the spec instead
+✗ Sonnet re-reads a file after editing — trust the edit, only re-read if CI proves it wrong
+✗ Haiku spawns further subagents — Haiku only uses direct tools (Bash, Read, Edit, Write)
+✗ Sequential Haiku spawns for independent tasks — spawn parallel groups in one message
+✗ Sonnet watches CI output directly — Haiku watches, Sonnet only sees the summary
+✗ Haiku makes architectural decisions — if it hits ambiguity, it reports to Sonnet, doesn't guess
+✗ Pasting full CI logs to Sonnet — grep first, paste only the relevant 5-10 lines
+✗ Running cdk synth more than once per phase unless a CDK .ts file changed
+✗ Running pytest on the full repo when only one module changed
+```
+
+---
+
+### SESSION START COMMAND (user pastes this to begin any phase)
+
+```
+Start the next phase using the TOKEN EFFICIENCY PROTOCOL in CLAUDE.md.
+Read SESSION TRACKER → produce the Micro-Task List → delegate all execution to Haiku.
+Sonnet: plan + diagnose only. Haiku: all files, commands, git, CI, prompts.md.
+Phase must complete within 3% session / 0.5% weekly.
+```
