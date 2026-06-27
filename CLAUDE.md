@@ -1182,6 +1182,8 @@ const logGroup = new LogGroup(this, "Logs", {
 - Bedrock: use Haiku by default, Sonnet only when fix code generation is needed
 - Lambda memory: right-size (don't set 3008MB for simple functions)
 - S3: always enable Intelligent Tiering on report bucket
+- S3: `versioned: false` and `autoDeleteObjects: true` on ALL buckets — no exceptions
+- All CDK resources: `RemovalPolicy.DESTROY` always — `cdk destroy --all` must leave nothing behind
 
 ### Monthly Cost Targets
 ```
@@ -1276,6 +1278,9 @@ GITHUB ACTIONS — OIDC SETUP (Do Once, Replaces Stored AWS Keys)
 | CFN + Terraform examples | Scanner demo targets | Both formats in the repo lets demos run live scans without external uploads; bad/ files are intentionally broken and must never be fixed |
 | OAC not OAI | CloudFront S3 origin | OAI (Origin Access Identity) is deprecated by AWS; OAC (Origin Access Control) is the current recommended pattern for S3+CloudFront |
 | CDK over Terraform | Use AWS CDK for infra | Project is AWS-only; CDK has better L2 constructs and TypeScript type safety |
+| No S3 versioning | `versioned: false` on all buckets | Demo project — no rollback needed; versioning complicates teardown (noncurrent versions block bucket deletion) |
+| Always DESTROY policy | `RemovalPolicy.DESTROY` on all resources, all envs | Single `cdk destroy --all` removes everything — zero manual cleanup; demo project has no prod data to protect |
+| autoDeleteObjects always on | `autoDeleteObjects: true` on all S3 buckets | Buckets with objects block stack deletion; CDK custom Lambda auto-empties them first |
 | Python 3.12 for Lambda | Not Node.js for backend | python-hcl2 and cfn-flip are Python-only; keeps backend in one language |
 | DynamoDB over RDS | All persistence in DynamoDB | Zero idle cost; no connection pool management in Lambda |
 | Fargate for Checkov | Not Lambda for OSS scanner | Checkov install is 500MB+; exceeds Lambda layer limits |

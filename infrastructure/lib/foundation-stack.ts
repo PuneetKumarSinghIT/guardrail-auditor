@@ -10,6 +10,14 @@ import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 
+// Helper: create an SSM parameter and immediately apply DESTROY removal policy.
+// ssm.StringParameter does not accept removalPolicy in its constructor props.
+function ssmParam(scope: Construct, id: string, name: string, value: string): ssm.StringParameter {
+  const p = new ssm.StringParameter(scope, id, { parameterName: name, stringValue: value });
+  p.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+  return p;
+}
+
 export class FoundationStack extends cdk.Stack {
   public readonly encryptionKey: kms.Key;
   public readonly uploadsBucket: s3.Bucket;
@@ -28,7 +36,11 @@ export class FoundationStack extends cdk.Stack {
     super(scope, id, props);
 
     const env = this.node.tryGetContext('env') ?? 'dev';
-    const removalPolicy = env === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
+
+    // Always DESTROY — this is a demo/portfolio project, no production data.
+    // Stack deletion removes everything automatically (autoDeleteObjects handles non-empty buckets).
+    // Note: KMS key deletion has a mandatory 7-day AWS pending window; everything else is immediate.
+    const removalPolicy = cdk.RemovalPolicy.DESTROY;
 
     cdk.Tags.of(this).add('Project', 'SecurityGuardrailAuditor');
     cdk.Tags.of(this).add('Environment', env);
@@ -43,46 +55,38 @@ export class FoundationStack extends cdk.Stack {
       removalPolicy,
     });
 
-    // Allow CloudWatch to use this key (needed for encrypted SNS → alarm integration)
     this.encryptionKey.addToResourcePolicy(new iam.PolicyStatement({
       principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
       actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
       resources: ['*'],
     }));
 
-    new ssm.StringParameter(this, 'KmsKeyArnParam', {
-      parameterName: `/guardrail/${env}/kms-key-arn`,
-      stringValue: this.encryptionKey.keyArn,
-    });
+    ssmParam(this, 'KmsKeyArnParam', `/guardrail/${env}/kms-key-arn`, this.encryptionKey.keyArn);
 
     // ── S3 Buckets ───────────────────────────────────────────────────
+    // No versioning on any bucket — demo project, simplifies teardown.
+    // autoDeleteObjects: true — CDK deploys a custom Lambda that empties the bucket
+    // before CloudFormation deletes it, so stack delete requires zero manual steps.
 
     // 1. iac-uploads — source IaC files; EventBridge enabled for scan trigger
     this.uploadsBucket = new s3.Bucket(this, 'IacUploadsBucket', {
       bucketName: `guardrail-iac-uploads-${env}-${this.account}`,
-      versioned: true,
+      versioned: false,
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: this.encryptionKey,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       eventBridgeEnabled: true,
-      lifecycleRules: [{
-        expiration: cdk.Duration.days(30),
-        noncurrentVersionExpiration: cdk.Duration.days(7),
-      }],
+      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
       removalPolicy,
-      autoDeleteObjects: env !== 'prod',
+      autoDeleteObjects: true,
     });
-
-    new ssm.StringParameter(this, 'UploadsBucketParam', {
-      parameterName: `/guardrail/${env}/bucket-iac-uploads`,
-      stringValue: this.uploadsBucket.bucketName,
-    });
+    ssmParam(this, 'UploadsBucketParam', `/guardrail/${env}/bucket-iac-uploads`, this.uploadsBucket.bucketName);
 
     // 2. scan-reports — generated PDF reports; tiered for cost savings
     this.reportsBucket = new s3.Bucket(this, 'ScanReportsBucket', {
       bucketName: `guardrail-scan-reports-${env}-${this.account}`,
-      versioned: true,
+      versioned: false,
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: this.encryptionKey,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -92,71 +96,48 @@ export class FoundationStack extends cdk.Stack {
           { storageClass: s3.StorageClass.INFREQUENT_ACCESS, transitionAfter: cdk.Duration.days(30) },
           { storageClass: s3.StorageClass.GLACIER, transitionAfter: cdk.Duration.days(90) },
         ],
-        noncurrentVersionExpiration: cdk.Duration.days(90),
       }],
       removalPolicy,
-      autoDeleteObjects: env !== 'prod',
+      autoDeleteObjects: true,
     });
-
-    new ssm.StringParameter(this, 'ReportsBucketParam', {
-      parameterName: `/guardrail/${env}/bucket-scan-reports`,
-      stringValue: this.reportsBucket.bucketName,
-    });
+    ssmParam(this, 'ReportsBucketParam', `/guardrail/${env}/bucket-scan-reports`, this.reportsBucket.bucketName);
 
     // 3. dashboard — static frontend assets served via CloudFront OAC
     this.dashboardBucket = new s3.Bucket(this, 'DashboardBucket', {
       bucketName: `guardrail-dashboard-${env}-${this.account}`,
+      versioned: false,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       removalPolicy,
-      autoDeleteObjects: env !== 'prod',
+      autoDeleteObjects: true,
     });
-
-    new ssm.StringParameter(this, 'DashboardBucketParam', {
-      parameterName: `/guardrail/${env}/bucket-dashboard`,
-      stringValue: this.dashboardBucket.bucketName,
-    });
+    ssmParam(this, 'DashboardBucketParam', `/guardrail/${env}/bucket-dashboard`, this.dashboardBucket.bucketName);
 
     // 4. cfn-artifacts — CDK-synthesized CloudFormation templates uploaded by GitHub Actions
     this.cfnArtifactsBucket = new s3.Bucket(this, 'CfnArtifactsBucket', {
       bucketName: `guardrail-cfn-artifacts-${env}-${this.account}`,
-      versioned: true,
+      versioned: false,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
-      lifecycleRules: [{
-        noncurrentVersionExpiration: cdk.Duration.days(90),
-        noncurrentVersionsToRetain: 10,
-      }],
       removalPolicy,
-      autoDeleteObjects: env !== 'prod',
+      autoDeleteObjects: true,
     });
-
-    new ssm.StringParameter(this, 'CfnArtifactsBucketParam', {
-      parameterName: `/guardrail/${env}/bucket-cfn-artifacts`,
-      stringValue: this.cfnArtifactsBucket.bucketName,
-    });
+    ssmParam(this, 'CfnArtifactsBucketParam', `/guardrail/${env}/bucket-cfn-artifacts`, this.cfnArtifactsBucket.bucketName);
 
     // 5. lambda-packages — zipped Lambda code uploaded by GitHub Actions
     this.lambdaPackagesBucket = new s3.Bucket(this, 'LambdaPackagesBucket', {
       bucketName: `guardrail-lambda-packages-${env}-${this.account}`,
-      versioned: true,
+      versioned: false,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
-      lifecycleRules: [{
-        expiration: cdk.Duration.days(30),
-        noncurrentVersionExpiration: cdk.Duration.days(7),
-      }],
+      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
       removalPolicy,
-      autoDeleteObjects: env !== 'prod',
+      autoDeleteObjects: true,
     });
-
-    new ssm.StringParameter(this, 'LambdaPackagesBucketParam', {
-      parameterName: `/guardrail/${env}/bucket-lambda-packages`,
-      stringValue: this.lambdaPackagesBucket.bucketName,
-    });
+    ssmParam(this, 'LambdaPackagesBucketParam', `/guardrail/${env}/bucket-lambda-packages`, this.lambdaPackagesBucket.bucketName);
 
     // ── DynamoDB Tables ──────────────────────────────────────────────
 
@@ -169,24 +150,15 @@ export class FoundationStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: this.encryptionKey,
       timeToLiveAttribute: 'ttl',
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: env === 'prod' },
       removalPolicy,
     });
-
     this.scanJobsTable.addGlobalSecondaryIndex({
       indexName: 'status-index',
       partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
     });
-
-    new ssm.StringParameter(this, 'ScanJobsTableParam', {
-      parameterName: `/guardrail/${env}/table-scan-jobs`,
-      stringValue: this.scanJobsTable.tableName,
-    });
-    new ssm.StringParameter(this, 'ScanJobsTableArnParam', {
-      parameterName: `/guardrail/${env}/table-scan-jobs-arn`,
-      stringValue: this.scanJobsTable.tableArn,
-    });
+    ssmParam(this, 'ScanJobsTableParam',    `/guardrail/${env}/table-scan-jobs`,     this.scanJobsTable.tableName);
+    ssmParam(this, 'ScanJobsTableArnParam', `/guardrail/${env}/table-scan-jobs-arn`, this.scanJobsTable.tableArn);
 
     // 2. findings — one item per rule violation found in a scan
     this.findingsTable = new dynamodb.Table(this, 'FindingsTable', {
@@ -197,24 +169,15 @@ export class FoundationStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: this.encryptionKey,
       timeToLiveAttribute: 'ttl',
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: env === 'prod' },
       removalPolicy,
     });
-
     this.findingsTable.addGlobalSecondaryIndex({
       indexName: 'severity-index',
       partitionKey: { name: 'severity', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'scan_job_id', type: dynamodb.AttributeType.STRING },
     });
-
-    new ssm.StringParameter(this, 'FindingsTableParam', {
-      parameterName: `/guardrail/${env}/table-findings`,
-      stringValue: this.findingsTable.tableName,
-    });
-    new ssm.StringParameter(this, 'FindingsTableArnParam', {
-      parameterName: `/guardrail/${env}/table-findings-arn`,
-      stringValue: this.findingsTable.tableArn,
-    });
+    ssmParam(this, 'FindingsTableParam',    `/guardrail/${env}/table-findings`,     this.findingsTable.tableName);
+    ssmParam(this, 'FindingsTableArnParam', `/guardrail/${env}/table-findings-arn`, this.findingsTable.tableArn);
 
     // 3. rules-catalog — static list of 20 security rules; no TTL
     this.rulesCatalogTable = new dynamodb.Table(this, 'RulesCatalogTable', {
@@ -225,11 +188,7 @@ export class FoundationStack extends cdk.Stack {
       encryptionKey: this.encryptionKey,
       removalPolicy,
     });
-
-    new ssm.StringParameter(this, 'RulesCatalogTableParam', {
-      parameterName: `/guardrail/${env}/table-rules-catalog`,
-      stringValue: this.rulesCatalogTable.tableName,
-    });
+    ssmParam(this, 'RulesCatalogTableParam', `/guardrail/${env}/table-rules-catalog`, this.rulesCatalogTable.tableName);
 
     // 4. ws-connections — live WebSocket connectionIds for scan progress push
     this.wsConnectionsTable = new dynamodb.Table(this, 'WsConnectionsTable', {
@@ -241,16 +200,9 @@ export class FoundationStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
       removalPolicy,
     });
-
-    new ssm.StringParameter(this, 'WsConnectionsTableParam', {
-      parameterName: `/guardrail/${env}/table-ws-connections`,
-      stringValue: this.wsConnectionsTable.tableName,
-    });
+    ssmParam(this, 'WsConnectionsTableParam', `/guardrail/${env}/table-ws-connections`, this.wsConnectionsTable.tableName);
 
     // ── IAM Roles ────────────────────────────────────────────────────
-
-    // Shared Lambda base role — CloudWatch Logs + X-Ray only
-    // Each Lambda stack adds function-specific permissions on top of this
     this.lambdaBaseRole = new iam.Role(this, 'LambdaBaseRole', {
       roleName: `guardrail-lambda-base-${env}`,
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -260,37 +212,24 @@ export class FoundationStack extends cdk.Stack {
       ],
     });
 
-    // Fargate task role — Checkov scanner container reads IaC from S3, writes findings to DDB via SQS
     this.fargateTaskRole = new iam.Role(this, 'FargateTaskRole', {
       roleName: `guardrail-fargate-task-${env}`,
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
-
     this.uploadsBucket.grantRead(this.fargateTaskRole);
     this.findingsTable.grantWriteData(this.fargateTaskRole);
     this.encryptionKey.grantDecrypt(this.fargateTaskRole);
 
-    new ssm.StringParameter(this, 'LambdaBaseRoleArnParam', {
-      parameterName: `/guardrail/${env}/iam-lambda-base-role-arn`,
-      stringValue: this.lambdaBaseRole.roleArn,
-    });
-    new ssm.StringParameter(this, 'FargateTaskRoleArnParam', {
-      parameterName: `/guardrail/${env}/iam-fargate-task-role-arn`,
-      stringValue: this.fargateTaskRole.roleArn,
-    });
+    ssmParam(this, 'LambdaBaseRoleArnParam',  `/guardrail/${env}/iam-lambda-base-role-arn`,  this.lambdaBaseRole.roleArn);
+    ssmParam(this, 'FargateTaskRoleArnParam',  `/guardrail/${env}/iam-fargate-task-role-arn`, this.fargateTaskRole.roleArn);
 
     // ── Billing Alarm ────────────────────────────────────────────────
-    // Requires "Billing Alerts" enabled in AWS Billing console (one-time manual step)
-    // Billing metrics are only published in us-east-1
-
     const billingTopic = new sns.Topic(this, 'BillingAlertsTopic', {
       topicName: `guardrail-billing-alerts-${env}`,
       masterKey: this.encryptionKey,
     });
-
-    billingTopic.addSubscription(
-      new snsSubscriptions.EmailSubscription('puneetkumarsingh765@gmail.com')
-    );
+    billingTopic.applyRemovalPolicy(removalPolicy);
+    billingTopic.addSubscription(new snsSubscriptions.EmailSubscription('puneetkumarsingh765@gmail.com'));
 
     const billingAlarm = new cloudwatch.Alarm(this, 'BillingAlarm', {
       alarmName: `guardrail-billing-${env}`,
@@ -307,16 +246,15 @@ export class FoundationStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-
     billingAlarm.addAlarmAction(new cloudwatchActions.SnsAction(billingTopic));
 
     // ── Stack Outputs ────────────────────────────────────────────────
-    new cdk.CfnOutput(this, 'KmsKeyArn', { value: this.encryptionKey.keyArn, exportName: `guardrail-kms-key-arn-${env}` });
+    new cdk.CfnOutput(this, 'KmsKeyArn',         { value: this.encryptionKey.keyArn, exportName: `guardrail-kms-key-arn-${env}` });
     new cdk.CfnOutput(this, 'UploadsBucketName', { value: this.uploadsBucket.bucketName });
     new cdk.CfnOutput(this, 'ReportsBucketName', { value: this.reportsBucket.bucketName });
     new cdk.CfnOutput(this, 'ScanJobsTableName', { value: this.scanJobsTable.tableName });
     new cdk.CfnOutput(this, 'FindingsTableName', { value: this.findingsTable.tableName });
     new cdk.CfnOutput(this, 'LambdaBaseRoleArn', { value: this.lambdaBaseRole.roleArn });
-    new cdk.CfnOutput(this, 'FargateTaskRoleArn', { value: this.fargateTaskRole.roleArn });
+    new cdk.CfnOutput(this, 'FargateTaskRoleArn',{ value: this.fargateTaskRole.roleArn });
   }
 }
