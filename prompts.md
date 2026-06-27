@@ -1533,3 +1533,30 @@ Branch: feature/phase-3-iac-examples. Next: PR to dev, then start Phase 4 Ingest
 **Elapsed Time:** ~10 minutes.
 
 ---
+
+## [2026-06-28] — Token Efficiency Protocol — Full Model Routing Strategy
+
+**User Prompt:**
+"Even git commit, AWS commands, and other activity — make Haiku do it. Use Sonnet only for validating the result, and even for validation if any action/data collection is required, ask Haiku to do it. Only use Sonnet whenever it really needs to. Add this to CLAUDE.md so every session auto-uses it. Performance must not degrade and errors must not occur."
+
+**Steps Implemented:**
+- Step 1: Extended model routing — Haiku now handles ALL tool calls including git, aws cli, cdk commands, pytest, gh pr commands, CI log fetching. Sonnet restricted to: read CLAUDE.md once, produce Micro-Task List, diagnose failures, approve results, sign off on acceptance criteria. ≤ 5 Sonnet turns per phase.
+- Step 2: Appended `## TOKEN EFFICIENCY PROTOCOL` to CLAUDE.md (after VIBE CODING TEST section) — auto-loaded every session, never needs re-pasting.
+  - Haiku task categories table (file ops, shell, aws, cdk, ci, audit log, CLAUDE.md updates)
+  - Micro-Task List format with parallel group notation
+  - Haiku spawn format with project rules baked in
+  - CI failure triage protocol (grep → Sonnet diagnosis → Haiku fix, max 3 cycles)
+  - Anti-patterns list (what degrades performance — never do these)
+  - Session start command (one paste to begin any phase)
+- Step 3: Rewrote `scripts/phase_session_prompt.md` as a lean cheat-sheet reference card (full protocol now in CLAUDE.md, no duplication).
+- Step 4: Committed + pushed to feature/phase-4-ingestion.
+
+**Files Modified:**
+- `CLAUDE.md` — TOKEN EFFICIENCY PROTOCOL section appended (~100 lines)
+- `scripts/phase_session_prompt.md` — rewritten as quick-start reference card only
+
+**Outcome:** DONE — Protocol embedded in CLAUDE.md. Every future session auto-inherits two-tier routing. Sonnet ≤ 5 turns per phase. All execution delegated to Haiku.
+
+**Elapsed Time:** ~15 minutes.
+
+---
