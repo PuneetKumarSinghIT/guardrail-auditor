@@ -1560,3 +1560,23 @@ Branch: feature/phase-3-iac-examples. Next: PR to dev, then start Phase 4 Ingest
 **Elapsed Time:** ~15 minutes.
 
 ---
+
+## [2026-06-28] — Self-Triggering Session Protocol Embedded in CLAUDE.md
+
+**User Prompt:**
+"Can't this part also be written in CLAUDE.md as first step to read the file efficiently and complete the implementation phase by phase efficiently? [the session start command]"
+
+**Steps Implemented:**
+- Updated `## CRITICAL: HOW TO USE THIS FILE` in CLAUDE.md — Step 4 now reads:
+  "IMMEDIATELY activate the TOKEN EFFICIENCY PROTOCOL" with inline bullet summary.
+- Added closing statement: "Reading this file IS the session start trigger. No separate prompt needed."
+- Committed + pushed to feature/phase-4-ingestion.
+
+**Files Modified:**
+- `CLAUDE.md` — HOW TO USE THIS FILE section (steps 4-8 updated, self-trigger statement added)
+
+**Outcome:** DONE — No separate prompt ever needed again. Opening a new Claude session and having CLAUDE.md in context automatically bootstraps Sonnet+Haiku two-tier workflow.
+
+**Elapsed Time:** ~5 minutes.
+
+---
