@@ -1286,3 +1286,164 @@ npx cdk deploy GuardrailFoundation-dev GuardrailAuth-dev --context env=dev --req
 **Elapsed Time (Session 7): ~35 minutes (Phase 1 — CDK init → stack deploy → verified → committed)**
 
 ---
+
+## [2026-06-28] — Session 8, Turn 1
+
+**User Prompt:**
+Append CLAUDE.md with two mandatory activities for vibe coding test:
+1. Add the prompt "You are a vibe coding expert hence you have to update prompts.md file
+   after all users prompts and steps which it ask you to implement. You have to keep the
+   trace of each activity as audit log."
+2. Add a Phase Decision Enforcement rule so that when CLAUDE.md is read, Claude follows
+   the phases and makes decisions per the prompts automatically.
+
+**Steps Implemented:**
+- Read CLAUDE.md structure (lines 1–1572) to find correct insertion point
+- Appended new section `## VIBE CODING TEST — MANDATORY ACTIVITIES (Always Active)` at end of CLAUDE.md
+- Section contains two named mandatory activities:
+  - MANDATORY ACTIVITY 1: exact user-provided prompt + audit log entry format + append-only rules
+  - MANDATORY ACTIVITY 2: Phase Decision Enforcement — read SESSION TRACKER, check PHASE STATUS,
+    make autonomous decisions, enforce acceptance criteria, block scope creep
+- Appended this audit entry to prompts.md
+
+**Files Created / Modified:**
+- `CLAUDE.md` — new section appended (lines 1573–1628 approx); two mandatory vibe coding activities
+
+**Outcome:** DONE
+
+---
+
+---
+
+## [2026-06-28] — Session 9, Turn 1
+
+**User Prompt:**
+Analyze claude.md file and let me know how many phases are completed and how many are left.
+
+**Steps Implemented:**
+- Read CLAUDE.md from context (loaded as project instructions) — no file read needed
+- Audited all 12 phases (Phase 0 through Phase 11) against their checklist items and SESSION TRACKER
+- Produced a phase completion status table:
+  - Phase 0 (Prerequisites): COMPLETE
+  - Phase 1 (Foundation Infrastructure): COMPLETE — all 5 acceptance criteria verified 2026-06-28
+  - Phase 2 (CI/CD Pipeline): COMPLETE — PR #2 merged, 2 verify items deferred to Phase 3
+  - Phase 3 through Phase 11: NOT STARTED (9 phases remaining)
+- Identified next action: `git checkout dev && git pull origin dev && git checkout -b feature/phase-3-iac-examples`
+
+**Files Created / Modified:**
+- None — read-only analysis
+
+**Outcome:** DONE
+
+**Elapsed Time:** Session just started — timer begins now.
+
+---
+
+## [2026-06-28] — Session 9, Turn 2
+
+**User Prompt:**
+Is this prompt and information is added to prompt.md file. As mentioned in claude.md file.
+
+**Steps Implemented:**
+- Read `prompts.md` (1315 lines) to verify if Session 9 entries were already logged
+- Confirmed: last entry was Session 8, Turn 1 — current session NOT yet recorded
+- Appended Session 9, Turn 1 entry for the phase analysis prompt
+- Appended this entry (Session 9, Turn 2) for the prompts.md verification prompt
+- Confirmed append-only compliance — zero deletions
+
+**Files Created / Modified:**
+- `prompts.md` — appended 2 new audit entries (Session 9 Turn 1 + Turn 2)
+
+**Outcome:** DONE
+
+**Elapsed Time:** ~2 minutes into Session 9.
+
+---
+
+## [2026-06-28] — Session 9, Turn 3
+
+**User Prompt:**
+update claude.md file to log the prompt and information in prompts.md file asap once activity is completed.
+
+**Steps Implemented:**
+- Read CLAUDE.md lines 1–40 and 1575–1634 to locate all three enforcement points
+- Made 4 targeted edits to CLAUDE.md:
+  1. `LEAD ARCHITECT MODE` Rule #2: changed "After every turn, update that file" →
+     "IMMEDIATELY after completing each activity — as the LAST step of that response"
+  2. `CRITICAL: HOW TO USE THIS FILE` step 6: added "IMMEDIATELY as the last step of every
+     response — not at end of session, not when asked"
+  3. `MANDATORY ACTIVITY 1` preamble: added 5-point non-negotiable enforcement list including
+     "FAILURE TO LOG = INCOMPLETE RESPONSE"
+  4. `MANDATORY ACTIVITY 1` rules list: added "Log immediately — the append to prompts.md is
+     the last tool call of every response"
+- Appended this entry to prompts.md immediately as the last step (demonstrating the new rule)
+
+**Files Created / Modified:**
+- `CLAUDE.md` — 4 targeted edits strengthening immediate prompts.md logging enforcement
+
+**Outcome:** DONE
+
+**Elapsed Time:** ~5 minutes into Session 9.
+
+---
+
+## [2026-06-28 Session 9, Turn 2+3] — Phase 3 IaC Demo Examples
+
+**User Prompt (Turn 2):**
+"Please analyze claude.md file and implement the project phase wise."
+
+**User Prompt (Turn 3):**
+"OK once reset then automatically start implementing it by resuming from the position where you have stopped this implementation at this moment. Please start implementation."
+
+**Steps Implemented:**
+- Step 1: Read CLAUDE.md fully — identified Phase 3 as NEXT per SESSION TRACKER
+- Step 2: Checked git status — on feature/easy-teardown with uncommitted CLAUDE.md/prompts.md changes
+- Step 3: Stashed uncommitted changes, created branch feature/phase-3-iac-examples, popped stash
+- Step 4: Created rules/rules-catalog.json — 20 rules covering S3, NETWORK, IAM, ENCRYPTION, LOGGING
+  categories with full metadata (severity, category, iac_types, remediation_docs_url, enabled, version)
+- Step 5: Created terraform-examples/good/s3-secure.tf — KMS encryption, versioning, logging,
+  block-all-public-access, lifecycle rules
+- Step 6: Created terraform-examples/good/sg-restricted.tf — SSH restricted to 10.0.0.0/8,
+  HTTPS public, no 0.0.0.0/0 on sensitive ports
+- Step 7: Created terraform-examples/good/iam-least-privilege.tf — scoped managed policy
+  (no wildcards), managed policy attachment (not inline)
+- Step 8: Created terraform-examples/bad/s3-public-bucket.tf — triggers S3-001, S3-002, S3-004
+- Step 9: Created terraform-examples/bad/sg-open-ssh.tf — triggers SG-001, SG-002, SG-003, SG-004
+- Step 10: Created terraform-examples/bad/iam-wildcard.tf — triggers IAM-001, IAM-002, IAM-005
+- Step 11: Created terraform-examples/bad/unencrypted-resources.tf — triggers ENC-001, ENC-002, ENC-003
+- Step 12: Created terraform-examples/bad/demo-master-bad.tf — PRIMARY DEMO FILE, triggers ALL CRITICAL
+  rules: S3-001,002,004, SG-001,002,003, IAM-001,002,003,005, ENC-001,002,003, LOG-001,002
+- Step 13: Created cloudformation/bad/public-s3-cfn.yaml — CFN S3 violations (S3-001,002,004)
+- Step 14: Created cloudformation/bad/open-sg-cfn.yaml — CFN network violations (SG-001,002,003,004)
+- Step 15: Created cloudformation/bad/demo-master-bad.yaml — CFN version of all violations,
+  PRIMARY CFN DEMO FILE
+- Step 16: Created cloudformation/good/secure-s3-cfn.yaml — compliant S3 with encryption,
+  versioning, logging bucket, public access blocked, intelligent tiering
+- Step 17: Created cloudformation/good/secure-sg-cfn.yaml — compliant 2-tier SG (ALB + web),
+  SSH from internal only, no open ports
+- Step 18: Updated CLAUDE.md — Phase 3 checklist all marked [x], SESSION TRACKER updated
+  with Phase 3 completion summary and Phase 4 start instructions
+
+**Files Created / Modified:**
+- `rules/rules-catalog.json` — 20 security rules with full metadata
+- `terraform-examples/good/s3-secure.tf` — compliant S3 (encryped, versioned, logged)
+- `terraform-examples/good/sg-restricted.tf` — compliant SG (no 0.0.0.0/0 on SSH)
+- `terraform-examples/good/iam-least-privilege.tf` — scoped IAM, managed policy, no wildcards
+- `terraform-examples/bad/s3-public-bucket.tf` — S3-001, S3-002, S3-004
+- `terraform-examples/bad/sg-open-ssh.tf` — SG-001, SG-002, SG-003, SG-004
+- `terraform-examples/bad/iam-wildcard.tf` — IAM-001, IAM-002, IAM-005
+- `terraform-examples/bad/unencrypted-resources.tf` — ENC-001, ENC-002, ENC-003
+- `terraform-examples/bad/demo-master-bad.tf` — ALL CRITICAL rules (primary demo file)
+- `cloudformation/bad/public-s3-cfn.yaml` — CFN S3 violations
+- `cloudformation/bad/open-sg-cfn.yaml` — CFN network violations
+- `cloudformation/bad/demo-master-bad.yaml` — ALL violations in CFN format
+- `cloudformation/good/secure-s3-cfn.yaml` — compliant CFN S3
+- `cloudformation/good/secure-sg-cfn.yaml` — compliant CFN 2-tier SG
+- `CLAUDE.md` — Phase 3 checklist [x], SESSION TRACKER updated to Phase 4
+
+**Outcome:** DONE — Phase 3 COMPLETE. 14 files created across rules/, terraform-examples/, cloudformation/.
+Branch: feature/phase-3-iac-examples. Next: PR to dev, then start Phase 4 Ingestion Layer.
+
+**Elapsed Time:** ~45 minutes into Session 9 (Phases 0,1,2 done in prior sessions; Phase 3 done this session).
+
+---

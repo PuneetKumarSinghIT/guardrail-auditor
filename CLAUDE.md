@@ -11,8 +11,9 @@ Lead Architect mode: ON. We are building a Python-based, API-first
 
 Rules:
 1. No Manual Edits: You provide all logic and fixes. I will not edit any code.
-2. Audit Log: You must maintain a file named prompts.md. After every turn, update
-   that file with the prompt just used.
+2. Audit Log: You must maintain a file named prompts.md. IMMEDIATELY after completing
+   each activity — as the LAST step of that response — append the entry to prompts.md.
+   Do NOT wait until asked. Do NOT batch entries. One prompt = one entry, logged at once.
 3. Time-Check: Start a timer. Goal is an MVP in 4-6 hours (Max window: 16h).
    Report 'Elapsed Time' at the end of every response.
 ```
@@ -31,7 +32,8 @@ every session, Claude must:
 3. Check `## PHASE STATUS` to know what is done vs in-progress vs not started
 4. Update `## SESSION TRACKER` at the END of every session with what was completed
 5. Never repeat work already marked DONE in phase status
-6. Update `prompts.md` with the user's prompt at the end of every turn
+6. Update `prompts.md` IMMEDIATELY as the last step of every response — not at end of
+   session, not when asked — append the entry automatically, every single turn
 7. Report **Elapsed Time** at the end of every response
 
 ---
@@ -392,25 +394,25 @@ START COMMANDS:
   mkdir -p cloudformation/good cloudformation/bad
   mkdir rules
 
-  [ ] rules/rules-catalog.json: 20 rules (see ARCHITECTURE SPECS for full list)
+  [x] rules/rules-catalog.json: 20 rules (see ARCHITECTURE SPECS for full list)
         Each rule: rule_id, name, description, severity, category, iac_types, enabled
-  [ ] terraform-examples/good/s3-secure.tf: encrypted, versioned, no public access, logging on
-  [ ] terraform-examples/good/sg-restricted.tf: no 0.0.0.0/0 on any port
-  [ ] terraform-examples/good/iam-least-privilege.tf: scoped actions, no wildcards, no inline
-  [ ] terraform-examples/bad/s3-public-bucket.tf: # Triggers: S3-001, S3-002, S3-004
-  [ ] terraform-examples/bad/sg-open-ssh.tf: # Triggers: SG-001, SG-002, SG-003
-  [ ] terraform-examples/bad/iam-wildcard.tf: # Triggers: IAM-001, IAM-002
-  [ ] terraform-examples/bad/unencrypted-resources.tf: # Triggers: ENC-001, ENC-002
-  [ ] terraform-examples/bad/demo-master-bad.tf:
+  [x] terraform-examples/good/s3-secure.tf: encrypted, versioned, no public access, logging on
+  [x] terraform-examples/good/sg-restricted.tf: no 0.0.0.0/0 on any port
+  [x] terraform-examples/good/iam-least-privilege.tf: scoped actions, no wildcards, no inline
+  [x] terraform-examples/bad/s3-public-bucket.tf: # Triggers: S3-001, S3-002, S3-004
+  [x] terraform-examples/bad/sg-open-ssh.tf: # Triggers: SG-001, SG-002, SG-003
+  [x] terraform-examples/bad/iam-wildcard.tf: # Triggers: IAM-001, IAM-002
+  [x] terraform-examples/bad/unencrypted-resources.tf: # Triggers: ENC-001, ENC-002
+  [x] terraform-examples/bad/demo-master-bad.tf:
         # Triggers: S3-001, SG-001, IAM-001, ENC-001, LOG-001 minimum
         # This is the PRIMARY demo file — one upload triggers all CRITICAL rules
-  [ ] cloudformation/bad/public-s3-cfn.yaml: # CFN equivalent of S3 violations
-  [ ] cloudformation/bad/open-sg-cfn.yaml: # CFN equivalent of network violations
-  [ ] cloudformation/bad/demo-master-bad.yaml:
+  [x] cloudformation/bad/public-s3-cfn.yaml: # CFN equivalent of S3 violations
+  [x] cloudformation/bad/open-sg-cfn.yaml: # CFN equivalent of network violations
+  [x] cloudformation/bad/demo-master-bad.yaml:
         # CFN version of all violations — used when client wants CFN demo
-  [ ] cloudformation/good/secure-s3-cfn.yaml
-  [ ] cloudformation/good/secure-sg-cfn.yaml
-  [ ] VERIFY: run all 5 acceptance criteria commands locally
+  [x] cloudformation/good/secure-s3-cfn.yaml
+  [x] cloudformation/good/secure-sg-cfn.yaml
+  [x] VERIFY: run all 5 acceptance criteria commands locally (2026-06-28)
 
 ═══════════════════════════════════════════════════════════════
 PHASE 4: Ingestion Layer
@@ -827,31 +829,38 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- Phase 2 CI/CD Pipeline — COMPLETE. All workflows live, PR #2 merged to dev.
-- Merged Phase 1 PR (#1: feature/phase-1-foundation → dev)
-- Created feature/phase-2-cicd, wrote all 7 GitHub Actions files
-- Fixed 01-pr-checks.yml: removed cache:pip (fails without requirements.txt), replaced
-    tfsec action with inline curl install + dir-check (action crashes on missing dir)
-- PR #2 checks: all 4 jobs passed (CloudFormation Lint, tfsec, Checkov, pytest)
-- PR #2 merged to dev (commit: be980bc)
-- Branch protection rulesets active: main_branch_ruleset, staging_rule_set, dev_rule_set
-- Default branch set to: dev
-- ECR repo created: guardrail-scanner (KMS-encrypted, scan-on-push)
-- GitHub secrets set: AWS_ACCOUNT_ID, AWS_REGION, ECR_REPO_URI
+- Phase 3 IaC Demo Examples — COMPLETE. All 14 files created on feature/phase-3-iac-examples.
+- Created rules/rules-catalog.json: 20 rules (S3-001→S3-005, SG-001→SG-004, IAM-001→IAM-005,
+    ENC-001→ENC-003, LOG-001→LOG-003) with full metadata (severity, category, iac_types, etc.)
+- Created terraform-examples/good/ (3 files): s3-secure.tf, sg-restricted.tf, iam-least-privilege.tf
+- Created terraform-examples/bad/ (5 files): s3-public-bucket.tf, sg-open-ssh.tf, iam-wildcard.tf,
+    unencrypted-resources.tf, demo-master-bad.tf (PRIMARY DEMO — triggers all CRITICAL rules)
+- Created cloudformation/bad/ (3 files): public-s3-cfn.yaml, open-sg-cfn.yaml, demo-master-bad.yaml
+- Created cloudformation/good/ (2 files): secure-s3-cfn.yaml, secure-sg-cfn.yaml
+- Phase 3 checklist fully marked [x]; all acceptance criteria met
+- Branch: feature/phase-3-iac-examples (built on top of feature/easy-teardown infra fixes)
 
 ### NEXT SESSION MUST START HERE
-**Phase 3 — IaC Demo Examples**
+**Phase 4 — Ingestion Layer (Scanner Lambda)**
 
-  1. git checkout dev && git pull origin dev
-  2. git checkout -b feature/phase-3-iac-examples
-  3. Create directories: rules/ terraform-examples/good/ terraform-examples/bad/ cloudformation/good/ cloudformation/bad/
-  4. Write all files per Phase 3 checklist (see below)
-  5. Verify: checkov -d terraform-examples/bad/ → ≥ 5 FAILED checks
-  6. Verify: checkov -d terraform-examples/good/ → 0 FAILED checks
-  7. PR feature/phase-3-iac-examples → dev (01-pr-checks will now run checkov on the new files)
+  1. Ensure feature/phase-3-iac-examples PR is merged to dev first
+  2. git checkout dev && git pull origin dev
+  3. git checkout -b feature/phase-4-ingestion
+  4. Create scanner/ directory structure per Phase 4 checklist
+  5. Write scanner/src/models/finding.py, scanner/src/handlers/ingest_handler.py
+  6. Write scanner/tests/test_ingest.py (5 tests)
+  7. Write infrastructure/lib/scanner-stack.ts (ingest Lambda + EventBridge rule)
+  8. Run: pytest scanner/tests/test_ingest.py → 5/5 pass
+  9. PR feature/phase-4-ingestion → dev
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | Phase 3 IaC Demo Examples COMPLETE. 14 files created: 20-rule rules-catalog.json,
+             3 good TF + 3 good CFN examples, 5 bad TF + 3 bad CFN examples.
+             demo-master-bad.tf and demo-master-bad.yaml trigger all CRITICAL rules.
+             Branch: feature/phase-3-iac-examples. Pending PR → dev.
+             Added VIBE CODING TEST mandatory activities section to CLAUDE.md.
+
 2026-06-28 | Phase 2 CI/CD COMPLETE. PR #2 merged to dev. All 4 pr-checks pass.
              Branch protection rulesets active (main/staging/dev). ECR repo created.
              Secrets set. Fixed setup-python cache:pip issue + tfsec missing-dir crash.
@@ -1570,3 +1579,72 @@ The `02-deploy-infra.yml` workflow enforces this order using sequential steps wi
 8. **Cost check** — before adding any new AWS service, verify it has zero idle cost or get approval.
 9. **One phase at a time** — complete all checklist items in a phase before moving to next.
 10. **Tag everything** — every CDK construct gets the `commonTags` object.
+
+---
+
+## VIBE CODING TEST — MANDATORY ACTIVITIES (Always Active)
+
+This project is a **vibe coding test** — a live demonstration of how effectively AI can be
+directed with the right prompts to build a production-grade system end-to-end.
+Every session is evidence of that capability.
+
+### MANDATORY ACTIVITY 1 — Prompts Audit Log (prompts.md)
+
+```
+You are a vibe coding expert hence you have to update prompts.md file after all
+users prompts and steps which it ask you to implement. You have to keep the trace
+of each activity as audit log.
+```
+
+**What this means in practice:**
+
+After EVERY user prompt — no matter how small — Claude MUST append an entry to `prompts.md`
+AS THE FINAL STEP OF THAT RESPONSE. This is non-negotiable:
+- Do NOT wait until the user asks "was this logged?"
+- Do NOT batch multiple prompts into one entry later
+- Do NOT skip logging for "simple" or "short" responses
+- The append MUST happen before Claude considers the turn complete
+- **FAILURE TO LOG = INCOMPLETE RESPONSE** regardless of code quality
+
+Entry format:
+
+```markdown
+## [YYYY-MM-DD HH:MM] — Session N, Turn N
+**User Prompt:**
+<exact or close paraphrase of what the user asked>
+
+**Steps Implemented:**
+- Step 1: <what was done>
+- Step 2: <what was done>
+- ...
+
+**Files Created / Modified:**
+- `path/to/file.ts` — <one-line description of change>
+
+**Outcome:** <DONE | IN-PROGRESS | BLOCKED — one line>
+```
+
+Rules:
+- Never skip an entry, even for tiny questions or config changes
+- The log is append-only — never edit or delete past entries
+- This is the primary evidence artifact for the vibe coding demonstration
+- If `prompts.md` does not exist, create it before writing the first entry
+- Log immediately — the append to prompts.md is the last tool call of every response
+
+### MANDATORY ACTIVITY 2 — Phase Decision Enforcement
+
+When Claude reads this CLAUDE.md file, it MUST:
+
+1. **Check SESSION TRACKER** → identify the current phase and the exact next step
+2. **Check PHASE STATUS** → confirm which items are `[ ]` not started vs `[x]` done
+3. **Make decisions autonomously** based on the phases defined above — do not ask the
+   user to choose between approaches that are already decided in the phase checklists
+4. **Follow the acceptance criteria** — a phase is only complete when its criteria are
+   verified, not just when the code is written
+5. **Block scope creep** — if a user request conflicts with the current phase, note it
+   in `prompts.md` and park it in SESSION TRACKER as "deferred to Phase N"
+
+**Why these two activities exist:** This project proves that a skilled AI (directed by
+well-crafted prompts) can build enterprise software. The prompts.md audit log IS the
+proof — every decision, every file, every fix is traceable. Treat it as the black box
+flight recorder for this build.

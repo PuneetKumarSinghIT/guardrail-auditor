@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Compliant security group configuration — passes all SG security rules.
+  Demonstrates: no 0.0.0.0/0 on SSH/RDP, HTTPS-only public ingress,
+  descriptive rules, and least-privilege egress. Use as a reference for compliant IaC.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the security group will be created
+
+  CorporateCidr:
+    Type: String
+    Default: "10.0.0.0/8"
+    Description: Internal corporate CIDR range for SSH access
+
+Resources:
+
+  # Compliant web-tier security group: HTTPS public, SSH internal-only, no RDP
+  SecureWebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-secure-web-sg"
+      GroupDescription: Compliant web-tier security group — no open SSH/RDP/all-traffic
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # HTTPS from internet is acceptable for a public web endpoint
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS public web traffic — intentionally public
+        # SSH only from internal corporate network — never 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref CorporateCidr
+          Description: SSH restricted to internal network only
+        # Application port from load balancer security group only (no direct internet)
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref SecureLoadBalancerSG
+          Description: App port from load balancer only — not from internet
+      SecurityGroupEgress:
+        # Outbound HTTPS only — restricts exfiltration paths
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Outbound HTTPS for AWS API calls and updates
+        # DNS resolution
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS resolution
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-secure-web-sg"
+        - Key: Tier
+          Value: web
+        - Key: Compliance
+          Value: compliant
+
+  # Load balancer security group — separate from application tier
+  SecureLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-secure-alb-sg"
+      GroupDescription: Load balancer security group — HTTPS from internet, forwards to app tier
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from internet to load balancer
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP redirect to HTTPS at load balancer level
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !Ref SecureWebSecurityGroup
+          Description: Forward to app tier only
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-secure-alb-sg"
+        - Key: Tier
+          Value: load-balancer
+        - Key: Compliance
+          Value: compliant
+
+Outputs:
+  WebSecurityGroupId:
+    Description: Compliant web-tier security group ID
+    Value: !Ref SecureWebSecurityGroup
+  LoadBalancerSecurityGroupId:
+    Description: Compliant load balancer security group ID
+    Value: !Ref SecureLoadBalancerSG

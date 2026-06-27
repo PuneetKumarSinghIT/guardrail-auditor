@@ -1,0 +1,222 @@
+[
+  {
+    "rule_id": "S3-001",
+    "name": "Public S3 Bucket ACL",
+    "description": "S3 bucket has a public ACL (public-read or public-read-write), exposing all objects to the internet without authentication.",
+    "severity": "CRITICAL",
+    "category": "S3",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/acls.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "S3-002",
+    "name": "Public S3 Bucket Policy",
+    "description": "S3 bucket policy allows public access with Principal set to '*', making bucket data accessible to anyone on the internet.",
+    "severity": "CRITICAL",
+    "category": "S3",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-policies.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "S3-003",
+    "name": "S3 Versioning Disabled",
+    "description": "S3 bucket does not have versioning enabled, preventing recovery from accidental deletion or overwrites.",
+    "severity": "MEDIUM",
+    "category": "S3",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "S3-004",
+    "name": "S3 Server-Side Encryption Disabled",
+    "description": "S3 bucket does not have server-side encryption configured, leaving data at rest unprotected.",
+    "severity": "HIGH",
+    "category": "S3",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/server-side-encryption.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "S3-005",
+    "name": "S3 Access Logging Disabled",
+    "description": "S3 bucket access logging is not enabled, making it impossible to audit who accessed bucket objects.",
+    "severity": "LOW",
+    "category": "S3",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "SG-001",
+    "name": "SSH Open to the World",
+    "description": "Security group allows unrestricted inbound SSH access (port 22) from 0.0.0.0/0, enabling brute-force attacks from any IP.",
+    "severity": "CRITICAL",
+    "category": "NETWORK",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "SG-002",
+    "name": "RDP Open to the World",
+    "description": "Security group allows unrestricted inbound RDP access (port 3389) from 0.0.0.0/0, exposing Windows instances to remote exploitation.",
+    "severity": "CRITICAL",
+    "category": "NETWORK",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "SG-003",
+    "name": "All Traffic Open to the World",
+    "description": "Security group allows all inbound traffic (-1 protocol) from 0.0.0.0/0, completely exposing the resource to the internet.",
+    "severity": "CRITICAL",
+    "category": "NETWORK",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "SG-004",
+    "name": "HTTP Open to the World on Non-LB Resource",
+    "description": "Security group allows unrestricted HTTP (port 80) traffic from 0.0.0.0/0 on a non-load-balancer resource, increasing attack surface.",
+    "severity": "MEDIUM",
+    "category": "NETWORK",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "IAM-001",
+    "name": "Wildcard Action in IAM Policy",
+    "description": "IAM policy contains Action: '*', granting unlimited permissions and violating the principle of least privilege.",
+    "severity": "HIGH",
+    "category": "IAM",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "IAM-002",
+    "name": "Wildcard Resource in IAM Policy",
+    "description": "IAM policy targets Resource: '*', allowing actions on every resource in the account instead of specific ARNs.",
+    "severity": "HIGH",
+    "category": "IAM",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "IAM-003",
+    "name": "Root Account Usage Detected",
+    "description": "IAM policy or configuration references the root account (arn:aws:iam::*:root), which should never be used for routine operations.",
+    "severity": "CRITICAL",
+    "category": "IAM",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#lock-away-credentials",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "IAM-004",
+    "name": "MFA Not Required for Privileged Access",
+    "description": "IAM policy allows privileged actions without requiring MFA, making account takeover easier if credentials are compromised.",
+    "severity": "HIGH",
+    "category": "IAM",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "IAM-005",
+    "name": "Inline IAM Policy Used",
+    "description": "Resource uses an inline IAM policy instead of a managed policy, making security reviews and bulk revocation difficult.",
+    "severity": "LOW",
+    "category": "IAM",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-vs-inline.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "ENC-001",
+    "name": "EBS Volume Not Encrypted",
+    "description": "EBS volume has encryption disabled, leaving data at rest on disk unprotected if the physical media is compromised.",
+    "severity": "HIGH",
+    "category": "ENCRYPTION",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSEncryption.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "ENC-002",
+    "name": "RDS Instance Encryption Disabled",
+    "description": "RDS database instance does not have storage encryption enabled, exposing database data at rest to unauthorized access.",
+    "severity": "HIGH",
+    "category": "ENCRYPTION",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "ENC-003",
+    "name": "Secret or Password in Plaintext",
+    "description": "Resource configuration contains a hardcoded password, secret key, or token in plaintext, which will be stored in IaC state files.",
+    "severity": "CRITICAL",
+    "category": "ENCRYPTION",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "LOG-001",
+    "name": "CloudTrail Not Enabled",
+    "description": "No CloudTrail trail is configured for the region, meaning API calls and management events are not being audited.",
+    "severity": "HIGH",
+    "category": "LOGGING",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-create-a-trail-using-the-console-first-time.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "LOG-002",
+    "name": "VPC Flow Logs Disabled",
+    "description": "VPC does not have Flow Logs enabled, making it impossible to audit network traffic for intrusion detection or forensics.",
+    "severity": "MEDIUM",
+    "category": "LOGGING",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html",
+    "enabled": true,
+    "version": "1.0.0"
+  },
+  {
+    "rule_id": "LOG-003",
+    "name": "S3 Access Logging Not Configured",
+    "description": "S3 bucket does not have server access logging enabled, leaving no audit trail of object-level GET and PUT operations.",
+    "severity": "LOW",
+    "category": "LOGGING",
+    "iac_types": ["terraform", "cloudformation"],
+    "remediation_docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html",
+    "enabled": true,
+    "version": "1.0.0"
+  }
+]

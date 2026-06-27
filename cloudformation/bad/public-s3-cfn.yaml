@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  INTENTIONALLY MISCONFIGURED — DO NOT FIX.
+  Triggers: S3-001 (Public ACL), S3-002 (Public Policy), S3-004 (No Encryption).
+  Used as a scanner demo target for CloudFormation scanning.
+
+Resources:
+
+  # S3-004: No BucketEncryption property — data at rest is unprotected
+  # S3-003: No VersioningConfiguration — no recovery from accidental deletion
+  # S3-005: No LoggingConfiguration — no access audit trail
+  InsecurePublicBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-public-demo-insecure"
+      # S3-001: AccessControl set to PublicRead — anyone can list and read objects
+      AccessControl: PublicRead
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # S3-002: Bucket policy with Principal '*' — fully public read without authentication
+  InsecureBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref InsecurePublicBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadAll
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt InsecurePublicBucket.Arn
+              - !Sub "${InsecurePublicBucket.Arn}/*"
+
+Outputs:
+  BucketName:
+    Description: Name of the intentionally insecure bucket
+    Value: !Ref InsecurePublicBucket
+  BucketArn:
+    Description: ARN of the intentionally insecure bucket
+    Value: !GetAtt InsecurePublicBucket.Arn
