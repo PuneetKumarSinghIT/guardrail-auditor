@@ -8,6 +8,13 @@ interface AuthStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
 }
 
+// Helper: create an SSM parameter and immediately apply DESTROY removal policy.
+function ssmParam(scope: Construct, id: string, name: string, value: string): ssm.StringParameter {
+  const p = new ssm.StringParameter(scope, id, { parameterName: name, stringValue: value });
+  p.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+  return p;
+}
+
 export class AuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
@@ -17,7 +24,9 @@ export class AuthStack extends cdk.Stack {
     super(scope, id, props);
 
     const env = this.node.tryGetContext('env') ?? 'dev';
-    const removalPolicy = env === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
+
+    // Always DESTROY — demo/portfolio project, no production data.
+    const removalPolicy = cdk.RemovalPolicy.DESTROY;
 
     cdk.Tags.of(this).add('Project', 'SecurityGuardrailAuditor');
     cdk.Tags.of(this).add('Environment', env);
@@ -25,7 +34,6 @@ export class AuthStack extends cdk.Stack {
     cdk.Tags.of(this).add('CostCenter', 'demo-portfolio');
 
     // ── Cognito User Pool ────────────────────────────────────────────
-    // selfSignUpEnabled: false — admin creates demo accounts, prevents random signups
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `guardrail-users-${env}`,
       selfSignUpEnabled: false,
@@ -56,15 +64,8 @@ export class AuthStack extends cdk.Stack {
         userSrp: true,
       },
       oAuth: {
-        flows: {
-          authorizationCodeGrant: true,
-        },
-        scopes: [
-          cognito.OAuthScope.EMAIL,
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.PROFILE,
-        ],
-        // localhost for local dev; CloudFront URL updated after Phase 8 deploy
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
         callbackUrls: ['http://localhost:5173/callback', 'https://placeholder.cloudfront.net/callback'],
         logoutUrls: ['http://localhost:5173', 'https://placeholder.cloudfront.net'],
       },
@@ -75,7 +76,6 @@ export class AuthStack extends cdk.Stack {
     });
 
     // ── Identity Pool ────────────────────────────────────────────────
-    // Allows authenticated Cognito users to assume IAM roles for AWS SDK calls
     this.identityPool = new cognito.CfnIdentityPool(this, 'IdentityPool', {
       identityPoolName: `guardrail_identity_${env}`,
       allowUnauthenticatedIdentities: false,
@@ -85,32 +85,18 @@ export class AuthStack extends cdk.Stack {
         serverSideTokenCheck: true,
       }],
     });
+    this.identityPool.applyRemovalPolicy(removalPolicy);
 
     // ── SSM Parameters ───────────────────────────────────────────────
-    new ssm.StringParameter(this, 'UserPoolIdParam', {
-      parameterName: `/guardrail/${env}/cognito-user-pool-id`,
-      stringValue: this.userPool.userPoolId,
-    });
-
-    new ssm.StringParameter(this, 'ClientIdParam', {
-      parameterName: `/guardrail/${env}/cognito-client-id`,
-      stringValue: this.userPoolClient.userPoolClientId,
-    });
-
-    new ssm.StringParameter(this, 'IdentityPoolIdParam', {
-      parameterName: `/guardrail/${env}/cognito-identity-pool-id`,
-      stringValue: this.identityPool.ref,
-    });
-
-    new ssm.StringParameter(this, 'UserPoolProviderUrlParam', {
-      parameterName: `/guardrail/${env}/cognito-user-pool-provider-url`,
-      stringValue: this.userPool.userPoolProviderUrl,
-    });
+    ssmParam(this, 'UserPoolIdParam',         `/guardrail/${env}/cognito-user-pool-id`,          this.userPool.userPoolId);
+    ssmParam(this, 'ClientIdParam',           `/guardrail/${env}/cognito-client-id`,             this.userPoolClient.userPoolClientId);
+    ssmParam(this, 'IdentityPoolIdParam',     `/guardrail/${env}/cognito-identity-pool-id`,      this.identityPool.ref);
+    ssmParam(this, 'UserPoolProviderUrlParam',`/guardrail/${env}/cognito-user-pool-provider-url`,this.userPool.userPoolProviderUrl);
 
     // ── Stack Outputs ────────────────────────────────────────────────
-    new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
-    new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
-    new cdk.CfnOutput(this, 'IdentityPoolId', { value: this.identityPool.ref });
+    new cdk.CfnOutput(this, 'UserPoolId',        { value: this.userPool.userPoolId });
+    new cdk.CfnOutput(this, 'UserPoolClientId',  { value: this.userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'IdentityPoolId',    { value: this.identityPool.ref });
     new cdk.CfnOutput(this, 'UserPoolProviderUrl', { value: this.userPool.userPoolProviderUrl });
   }
 }
