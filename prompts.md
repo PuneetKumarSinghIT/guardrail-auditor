@@ -1508,3 +1508,28 @@ Branch: feature/phase-3-iac-examples. Next: PR to dev, then start Phase 4 Ingest
 **Elapsed Time:** ~2.5 hours total session time across original session + resume. Phase 4 complete.
 
 ---
+
+## [2026-06-28] — Token Optimization Workflow Design
+
+**User Prompt:**
+"As I have got this message from usage side: 32% of usage came from subagent-heavy sessions. Create one prompt which will use Sonnet 4.6 for planning and dividing the task into simple and easy work which can be done by Haiku 4.5 easily without mistake, and then Sonnet will verify it in optimized manner. I want each phase to complete within 3% usage of 5-hour session and only 0.5% of weekly limit."
+
+**Steps Implemented:**
+- Step 1: Designed two-tier model strategy — Sonnet plans + verifies, Haiku writes files
+- Step 2: Created `scripts/phase_session_prompt.md` with:
+  - Session bootstrap procedure (read CLAUDE.md once, produce micro-task list, execute)
+  - Haiku spawn template (exact Agent call format with model="haiku")
+  - Per-turn token guardrails (read once, parallel spawns, log-section-only CI debug)
+  - Phase budget breakdown: 3% session / 0.5% weekly target
+  - Haiku task format with exact function signatures so it needs zero context
+  - Verification checklist before every PR
+- Step 3: Committed to feature/phase-4-ingestion, pushed
+
+**Files Created / Modified:**
+- `scripts/phase_session_prompt.md` — master session prompt for all future phases
+
+**Outcome:** DONE — Token-optimized workflow defined. Start next phase by pasting the session start command from this file.
+
+**Elapsed Time:** ~10 minutes.
+
+---
