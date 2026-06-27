@@ -1,0 +1,198 @@
+name: 03 — Deploy Lambda Functions
+
+on:
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - "scanner/**"
+      - "api/**"
+      - "ai-engine/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  detect-changes:
+    name: Detect changed Lambda directories
+    runs-on: ubuntu-latest
+    outputs:
+      scanner: ${{ steps.filter.outputs.scanner }}
+      api: ${{ steps.filter.outputs.api }}
+      ai-engine: ${{ steps.filter.outputs.ai-engine }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            scanner:
+              - 'scanner/**'
+            api:
+              - 'api/**'
+            ai-engine:
+              - 'ai-engine/**'
+
+  resolve-env:
+    name: Resolve deployment environment
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_env: ${{ steps.env.outputs.deploy_env }}
+    steps:
+      - id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "deploy_env=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_env=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-scanner:
+    name: Deploy scanner Lambda
+    needs: [detect-changes, resolve-env]
+    if: needs.detect-changes.outputs.scanner == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.deploy_env }}
+    env:
+      DEPLOY_ENV: ${{ needs.resolve-env.outputs.deploy_env }}
+      FUNCTION_NAME: guardrail-ingest-handler-${{ needs.resolve-env.outputs.deploy_env }}
+      PACKAGE_BUCKET: guardrail-lambda-packages-${{ needs.resolve-env.outputs.deploy_env }}-${{ secrets.AWS_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package scanner Lambda
+        run: |
+          cd scanner
+          pip install -r requirements.txt -t package/ --quiet
+          cp -r src/* package/
+          cd package && zip -r ../lambda.zip . -q && cd ..
+          echo "Package size: $(du -sh lambda.zip | cut -f1)"
+
+      - name: Upload to S3
+        run: |
+          KEY="${DEPLOY_ENV}/scanner/${{ github.sha }}.zip"
+          aws s3 cp scanner/lambda.zip "s3://${PACKAGE_BUCKET}/${KEY}"
+          echo "S3_KEY=${KEY}" >> "$GITHUB_ENV"
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${FUNCTION_NAME}" \
+            --s3-bucket "${PACKAGE_BUCKET}" \
+            --s3-key "${S3_KEY}" \
+            --no-cli-pager
+          aws lambda wait function-updated \
+            --function-name "${FUNCTION_NAME}"
+          VERSION=$(aws lambda publish-version \
+            --function-name "${FUNCTION_NAME}" \
+            --query Version --output text)
+          echo "Published version: ${VERSION}"
+        continue-on-error: true
+        # continue-on-error: Lambda doesn't exist until Phase 4 deploys it via CDK
+        # Once Phase 4 is complete, remove this line
+
+  deploy-api:
+    name: Deploy api Lambda
+    needs: [detect-changes, resolve-env]
+    if: needs.detect-changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.deploy_env }}
+    env:
+      DEPLOY_ENV: ${{ needs.resolve-env.outputs.deploy_env }}
+      FUNCTION_NAME: guardrail-api-handler-${{ needs.resolve-env.outputs.deploy_env }}
+      PACKAGE_BUCKET: guardrail-lambda-packages-${{ needs.resolve-env.outputs.deploy_env }}-${{ secrets.AWS_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package api Lambda
+        run: |
+          cd api
+          pip install -r requirements.txt -t package/ --quiet
+          cp -r src/* package/
+          cd package && zip -r ../lambda.zip . -q && cd ..
+
+      - name: Upload to S3
+        run: |
+          KEY="${DEPLOY_ENV}/api/${{ github.sha }}.zip"
+          aws s3 cp api/lambda.zip "s3://${PACKAGE_BUCKET}/${KEY}"
+          echo "S3_KEY=${KEY}" >> "$GITHUB_ENV"
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${FUNCTION_NAME}" \
+            --s3-bucket "${PACKAGE_BUCKET}" \
+            --s3-key "${S3_KEY}" \
+            --no-cli-pager
+          aws lambda wait function-updated \
+            --function-name "${FUNCTION_NAME}"
+          aws lambda publish-version --function-name "${FUNCTION_NAME}" --no-cli-pager
+        continue-on-error: true
+
+  deploy-ai-engine:
+    name: Deploy ai-engine Lambda
+    needs: [detect-changes, resolve-env]
+    if: needs.detect-changes.outputs.ai-engine == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.deploy_env }}
+    env:
+      DEPLOY_ENV: ${{ needs.resolve-env.outputs.deploy_env }}
+      FUNCTION_NAME: guardrail-ai-analyzer-${{ needs.resolve-env.outputs.deploy_env }}
+      PACKAGE_BUCKET: guardrail-lambda-packages-${{ needs.resolve-env.outputs.deploy_env }}-${{ secrets.AWS_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package ai-engine Lambda
+        run: |
+          cd ai-engine
+          pip install -r requirements.txt -t package/ --quiet
+          cp -r src/* package/
+          cd package && zip -r ../lambda.zip . -q && cd ..
+
+      - name: Upload to S3
+        run: |
+          KEY="${DEPLOY_ENV}/ai-engine/${{ github.sha }}.zip"
+          aws s3 cp ai-engine/lambda.zip "s3://${PACKAGE_BUCKET}/${KEY}"
+          echo "S3_KEY=${KEY}" >> "$GITHUB_ENV"
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${FUNCTION_NAME}" \
+            --s3-bucket "${PACKAGE_BUCKET}" \
+            --s3-key "${S3_KEY}" \
+            --no-cli-pager
+          aws lambda wait function-updated \
+            --function-name "${FUNCTION_NAME}"
+          aws lambda publish-version --function-name "${FUNCTION_NAME}" --no-cli-pager
+        continue-on-error: true

@@ -1,0 +1,113 @@
+name: 05 — Deploy Fargate Scanner (Docker/ECR)
+
+on:
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - "fargate/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Push Scanner Image — ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deployment environment
+        id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "deploy_env=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_env=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        id: tags
+        run: |
+          ENV="${{ steps.env.outputs.deploy_env }}"
+          ECR_URI="${{ secrets.ECR_REPO_URI }}"
+          SHA_TAG="${ECR_URI}:${ENV}-${{ github.sha }}"
+          LATEST_TAG="${ECR_URI}:${ENV}-latest"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        working-directory: fargate
+        run: |
+          docker build \
+            -t "${{ steps.tags.outputs.sha_tag }}" \
+            -t "${{ steps.tags.outputs.latest_tag }}" \
+            .
+
+      - name: Push to ECR
+        run: |
+          docker push "${{ steps.tags.outputs.sha_tag }}"
+          docker push "${{ steps.tags.outputs.latest_tag }}"
+          echo "Pushed images:"
+          echo "  ${{ steps.tags.outputs.sha_tag }}"
+          echo "  ${{ steps.tags.outputs.latest_tag }}"
+
+      - name: Register new ECS task definition revision
+        id: task-def
+        run: |
+          ENV="${{ steps.env.outputs.deploy_env }}"
+          TASK_FAMILY="guardrail-scanner-${ENV}"
+
+          # Fetch current task def, update image, register new revision
+          CURRENT=$(aws ecs describe-task-definition \
+            --task-definition "${TASK_FAMILY}" \
+            --query taskDefinition \
+            --output json 2>/dev/null || echo "{}")
+
+          if echo "$CURRENT" | grep -q '"taskDefinitionArn"'; then
+            NEW_DEF=$(echo "$CURRENT" | python3 -c "
+          import json, sys
+          td = json.load(sys.stdin)
+          # Update container image to new SHA tag
+          for c in td.get('containerDefinitions', []):
+              if 'guardrail-scanner' in c.get('name', ''):
+                  c['image'] = '${{ steps.tags.outputs.sha_tag }}'
+          # Remove read-only fields before re-registering
+          for field in ['taskDefinitionArn','revision','status','requiresAttributes',
+                         'compatibilities','registeredAt','registeredBy']:
+              td.pop(field, None)
+          print(json.dumps(td))
+          ")
+            NEW_ARN=$(aws ecs register-task-definition \
+              --cli-input-json "$NEW_DEF" \
+              --query taskDefinition.taskDefinitionArn \
+              --output text)
+            echo "Registered new task definition: ${NEW_ARN}"
+            echo "task_def_arn=${NEW_ARN}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Task definition ${TASK_FAMILY} not found — skipping update (Phase 5 will create it via CDK)"
+          fi
+        continue-on-error: true
+        # continue-on-error: ECS cluster/task-def created in Phase 5 via CDK
+        # Remove once Phase 5 is complete
+
+      - name: Summary
+        run: |
+          echo "### Fargate Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Environment:** ${{ steps.env.outputs.deploy_env }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image (SHA):** \`${{ steps.tags.outputs.sha_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image (latest):** \`${{ steps.tags.outputs.latest_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ steps.task-def.outputs.task_def_arn }}" ]; then
+            echo "- **Task Def ARN:** \`${{ steps.task-def.outputs.task_def_arn }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi

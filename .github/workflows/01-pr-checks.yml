@@ -1,0 +1,118 @@
+name: 01 — PR Checks
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python Tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 4
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov moto[all] boto3
+          for dir in scanner api ai-engine; do
+            if [ -f "$dir/requirements.txt" ]; then
+              pip install -r "$dir/requirements.txt"
+            fi
+          done
+
+      - name: Run pytest with coverage
+        run: |
+          HAS_TESTS=false
+          for dir in scanner api ai-engine; do
+            if [ -d "$dir/tests" ] && find "$dir/tests" -name "test_*.py" | grep -q .; then
+              HAS_TESTS=true
+            fi
+          done
+          if [ "$HAS_TESTS" = "true" ]; then
+            pytest scanner/ api/ ai-engine/ \
+              --cov=src \
+              --cov-fail-under=70 \
+              --cov-report=term-missing \
+              -v \
+              --ignore=scanner/tests/fixtures
+          else
+            echo "No test files found yet — skipping (Phase 4+ will add them)"
+          fi
+
+  cfn-lint:
+    name: CloudFormation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 3
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint CloudFormation templates
+        run: |
+          if [ -d "cloudformation" ] && find cloudformation/ -name "*.yaml" -o -name "*.json" 2>/dev/null | grep -q .; then
+            cfn-lint cloudformation/**/*.yaml || true
+          else
+            echo "No CloudFormation templates found — skipping (Phase 3 will add them)"
+          fi
+
+  tfsec:
+    name: Terraform Security Scan (tfsec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        run: |
+          if [ ! -d "terraform-examples" ]; then
+            echo "terraform-examples/ not found — skipping (Phase 3 will add it)"
+            exit 0
+          fi
+          curl -sL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+          tfsec terraform-examples/ --soft-fail --no-color
+        # soft-fail: bad/ files will have findings by design — that's expected
+
+  checkov:
+    name: IaC Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 3
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Run Checkov on IaC examples
+        run: |
+          if [ -d "cloudformation" ] || [ -d "terraform-examples" ]; then
+            DIRS=""
+            [ -d "cloudformation" ]      && DIRS="$DIRS --directory cloudformation"
+            [ -d "terraform-examples" ]  && DIRS="$DIRS --directory terraform-examples"
+            checkov $DIRS \
+              --framework terraform,cloudformation \
+              --soft-fail \
+              --output cli \
+              --compact \
+              || true
+          else
+            echo "No IaC example directories found — skipping (Phase 3 will add them)"
+          fi
+        # soft-fail + || true: bad/ files have intentional findings; Phase 3 tunes --check flags
