@@ -1447,3 +1447,136 @@ Branch: feature/phase-3-iac-examples. Next: PR to dev, then start Phase 4 Ingest
 **Elapsed Time:** ~45 minutes into Session 9 (Phases 0,1,2 done in prior sessions; Phase 3 done this session).
 
 ---
+
+## [2026-06-28 Session 9 Continued] — Phase 4 Implementation (Resumed After Context Compaction)
+
+**User Prompt:**
+"Please analyze claude.md file and implement the project phase wise." + "OK you are ready for phase 4 then implement it with confirmation how much is done already and how much is left with your planner mode on so track everything. Once all these tasks are done then update prompts.md file as well." [Phase 4 implementation picked up from pre-compaction context.]
+
+**Steps Implemented:**
+
+- Step 1: Audited existing Phase 4 files (in Planner Mode) — found 95% done as untracked files:
+  - DONE: finding.py, ingest_handler.py, requirements.txt, test_ingest.py, valid.tf fixture
+  - GAPS: invalid.exe fixture (missing), app.ts (ScannerStack not wired), EventBus export (missing from FoundationStack)
+
+- Step 2: Created `scanner/tests/fixtures/invalid.exe` — 4-byte MZ binary for negative extension test
+
+- Step 3: Fixed `scanner-stack.ts` bugs:
+  - Removed `ec2` import (unused)
+  - `RemovalPolicy` was conditional (RETAIN in prod) → always `DESTROY` (infra/CLAUDE.md rule)
+  - `autoDeleteImages: true` → `emptyOnDelete: true` (ECR deprecation)
+  - `containerInsights` → `containerInsightsV2: ecs.ContainerInsights.ENABLED` (ECS deprecation)
+  - S3UploadRule now uses `events.EventBus.fromEventBusName(this, "DefaultBus", "default")` — S3 events go to the default bus; ScanRequestedRule uses `props.eventBus` (custom guardrail bus)
+  - `cdk synth --context env=dev` → zero warnings
+
+- Step 4: Added EventBus to `infrastructure/lib/foundation-stack.ts`:
+  - `new events.EventBus` → `guardrail-events-${env}`
+  - `public readonly eventBus: events.EventBus` export
+  - SSM params: `/guardrail/${env}/event-bus-name`, `/guardrail/${env}/event-bus-arn`
+  - CfnOutput: `EventBusName`
+
+- Step 5: Wired `ScannerStack` in `infrastructure/bin/app.ts`:
+  - Import + instantiate `GuardrailScanner-${env}`
+  - Pass all foundation props: scanJobsTable, findingsTable, rulesCatalogTable, uploadBucket, kmsKey, eventBus
+  - `scanner.addDependency(foundation)`
+
+- Step 6: Updated `CLAUDE.md` — Phase 4 checklist all [x], SESSION TRACKER updated to Phase 5
+
+- Step 7: Created branch `feature/phase-4-ingestion`, committed all files, opened PR #7
+
+- Step 8: CI debugging (4 failures → all fixed):
+  - Fix 1: Workflow hardcoded `pytest scanner/ api/ ai-engine/` — `api/` and `ai-engine/` don't exist yet → exit code 4. Fixed: build `$TEST_DIRS` dynamically from dirs with tests
+  - Fix 2: `scanner/__init__.py` missing — `ModuleNotFoundError: No module named 'scanner'`. Added empty `scanner/__init__.py`
+  - Fix 3: `test_eventbridge_event_published` opened nested `mock_aws()` inside autouse fixture's mock → DDB ResourceInUseException. Fixed: removed inner mock (autouse already provides it)
+  - Fix 4: `--cov=src` pointed at non-existent module. Fixed: dynamically build `--cov=scanner/src` from dirs that have `src/` subdirectory
+  - Fix 5: Coverage total 63% < 70% because `finding.py` had 0% coverage (not used by ingest handler). Fixed: added `scanner/tests/test_finding.py` with 5 tests (defaults, to_ddb, truncation, dismissed_at, round-trip). Coverage now >90%.
+
+- Step 9: All 4 CI checks passed. PR #7 squash-merged to dev.
+
+**Files Created / Modified:**
+- `scanner/__init__.py` — empty init to make scanner a Python package from repo root
+- `scanner/tests/fixtures/invalid.exe` — 4-byte fake MZ binary for negative extension test
+- `scanner/tests/test_finding.py` — 5 tests for Finding dataclass (to_dynamodb_item, from_dynamodb_item, round-trip, truncation, dismissed_at)
+- `infrastructure/lib/scanner-stack.ts` — CDK ScannerStack: 3 Lambdas + SQS + ECR + ECS/Fargate + 2 EventBridge rules; always DESTROY; S3→default bus / guardrail→custom bus routing
+- `infrastructure/lib/foundation-stack.ts` — added EventBus `guardrail-events-${env}` with public export + SSM params
+- `infrastructure/bin/app.ts` — GuardrailScanner-${env} instantiated and wired
+- `.github/workflows/01-pr-checks.yml` — dynamic TEST_DIRS + dynamic COV_FLAGS (compatible with any number of Lambda dirs)
+- `CLAUDE.md` — Phase 4 [x], SESSION TRACKER → Phase 5 next
+
+**Outcome:** DONE — Phase 4 COMPLETE. PR #7 merged to dev. All 4 CI checks pass: pytest (10 tests, 100% coverage on ingest_handler + finding), CFN Lint, Checkov, tfsec.
+
+**Elapsed Time:** ~2.5 hours total session time across original session + resume. Phase 4 complete.
+
+---
+
+## [2026-06-28] — Token Optimization Workflow Design
+
+**User Prompt:**
+"As I have got this message from usage side: 32% of usage came from subagent-heavy sessions. Create one prompt which will use Sonnet 4.6 for planning and dividing the task into simple and easy work which can be done by Haiku 4.5 easily without mistake, and then Sonnet will verify it in optimized manner. I want each phase to complete within 3% usage of 5-hour session and only 0.5% of weekly limit."
+
+**Steps Implemented:**
+- Step 1: Designed two-tier model strategy — Sonnet plans + verifies, Haiku writes files
+- Step 2: Created `scripts/phase_session_prompt.md` with:
+  - Session bootstrap procedure (read CLAUDE.md once, produce micro-task list, execute)
+  - Haiku spawn template (exact Agent call format with model="haiku")
+  - Per-turn token guardrails (read once, parallel spawns, log-section-only CI debug)
+  - Phase budget breakdown: 3% session / 0.5% weekly target
+  - Haiku task format with exact function signatures so it needs zero context
+  - Verification checklist before every PR
+- Step 3: Committed to feature/phase-4-ingestion, pushed
+
+**Files Created / Modified:**
+- `scripts/phase_session_prompt.md` — master session prompt for all future phases
+
+**Outcome:** DONE — Token-optimized workflow defined. Start next phase by pasting the session start command from this file.
+
+**Elapsed Time:** ~10 minutes.
+
+---
+
+## [2026-06-28] — Token Efficiency Protocol — Full Model Routing Strategy
+
+**User Prompt:**
+"Even git commit, AWS commands, and other activity — make Haiku do it. Use Sonnet only for validating the result, and even for validation if any action/data collection is required, ask Haiku to do it. Only use Sonnet whenever it really needs to. Add this to CLAUDE.md so every session auto-uses it. Performance must not degrade and errors must not occur."
+
+**Steps Implemented:**
+- Step 1: Extended model routing — Haiku now handles ALL tool calls including git, aws cli, cdk commands, pytest, gh pr commands, CI log fetching. Sonnet restricted to: read CLAUDE.md once, produce Micro-Task List, diagnose failures, approve results, sign off on acceptance criteria. ≤ 5 Sonnet turns per phase.
+- Step 2: Appended `## TOKEN EFFICIENCY PROTOCOL` to CLAUDE.md (after VIBE CODING TEST section) — auto-loaded every session, never needs re-pasting.
+  - Haiku task categories table (file ops, shell, aws, cdk, ci, audit log, CLAUDE.md updates)
+  - Micro-Task List format with parallel group notation
+  - Haiku spawn format with project rules baked in
+  - CI failure triage protocol (grep → Sonnet diagnosis → Haiku fix, max 3 cycles)
+  - Anti-patterns list (what degrades performance — never do these)
+  - Session start command (one paste to begin any phase)
+- Step 3: Rewrote `scripts/phase_session_prompt.md` as a lean cheat-sheet reference card (full protocol now in CLAUDE.md, no duplication).
+- Step 4: Committed + pushed to feature/phase-4-ingestion.
+
+**Files Modified:**
+- `CLAUDE.md` — TOKEN EFFICIENCY PROTOCOL section appended (~100 lines)
+- `scripts/phase_session_prompt.md` — rewritten as quick-start reference card only
+
+**Outcome:** DONE — Protocol embedded in CLAUDE.md. Every future session auto-inherits two-tier routing. Sonnet ≤ 5 turns per phase. All execution delegated to Haiku.
+
+**Elapsed Time:** ~15 minutes.
+
+---
+
+## [2026-06-28] — Self-Triggering Session Protocol Embedded in CLAUDE.md
+
+**User Prompt:**
+"Can't this part also be written in CLAUDE.md as first step to read the file efficiently and complete the implementation phase by phase efficiently? [the session start command]"
+
+**Steps Implemented:**
+- Updated `## CRITICAL: HOW TO USE THIS FILE` in CLAUDE.md — Step 4 now reads:
+  "IMMEDIATELY activate the TOKEN EFFICIENCY PROTOCOL" with inline bullet summary.
+- Added closing statement: "Reading this file IS the session start trigger. No separate prompt needed."
+- Committed + pushed to feature/phase-4-ingestion.
+
+**Files Modified:**
+- `CLAUDE.md` — HOW TO USE THIS FILE section (steps 4-8 updated, self-trigger statement added)
+
+**Outcome:** DONE — No separate prompt ever needed again. Opening a new Claude session and having CLAUDE.md in context automatically bootstraps Sonnet+Haiku two-tier workflow.
+
+**Elapsed Time:** ~5 minutes.
+
+---
