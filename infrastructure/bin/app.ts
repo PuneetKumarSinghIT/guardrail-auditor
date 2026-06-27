@@ -3,6 +3,7 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { FoundationStack } from '../lib/foundation-stack';
 import { AuthStack } from '../lib/auth-stack';
+import { ScannerStack } from '../lib/scanner-stack';
 
 const app = new cdk.App();
 
@@ -22,5 +23,16 @@ const auth = new AuthStack(app, `GuardrailAuth-${env}`, {
   description: `Guardrail Auditor - Cognito auth (${env})`,
   encryptionKey: foundation.encryptionKey,
 });
-
 auth.addDependency(foundation);
+
+const scanner = new ScannerStack(app, `GuardrailScanner-${env}`, {
+  env: awsEnv,
+  description: `Guardrail Auditor - Ingestion + scanning engine (${env})`,
+  scanJobsTable: foundation.scanJobsTable,
+  findingsTable: foundation.findingsTable,
+  rulesCatalogTable: foundation.rulesCatalogTable,
+  uploadBucket: foundation.uploadsBucket,
+  kmsKey: foundation.encryptionKey,
+  eventBus: foundation.eventBus,
+});
+scanner.addDependency(foundation);

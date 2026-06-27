@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as events from 'aws-cdk-lib/aws-events';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -31,6 +32,7 @@ export class FoundationStack extends cdk.Stack {
   public readonly wsConnectionsTable: dynamodb.Table;
   public readonly lambdaBaseRole: iam.Role;
   public readonly fargateTaskRole: iam.Role;
+  public readonly eventBus: events.EventBus;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -202,6 +204,17 @@ export class FoundationStack extends cdk.Stack {
     });
     ssmParam(this, 'WsConnectionsTableParam', `/guardrail/${env}/table-ws-connections`, this.wsConnectionsTable.tableName);
 
+    // ── EventBridge Custom Bus ───────────────────────────────────────
+    // All guardrail application events (ScanRequested, ScanComplete, AIAnalysisComplete)
+    // are published here. S3 ObjectCreated events go to the default bus and are routed
+    // to ingest-handler, which then publishes ScanRequested onto this custom bus.
+    this.eventBus = new events.EventBus(this, 'GuardrailEventBus', {
+      eventBusName: `guardrail-events-${env}`,
+    });
+    this.eventBus.applyRemovalPolicy(removalPolicy);
+    ssmParam(this, 'EventBusNameParam', `/guardrail/${env}/event-bus-name`, this.eventBus.eventBusName);
+    ssmParam(this, 'EventBusArnParam',  `/guardrail/${env}/event-bus-arn`,  this.eventBus.eventBusArn);
+
     // ── IAM Roles ────────────────────────────────────────────────────
     this.lambdaBaseRole = new iam.Role(this, 'LambdaBaseRole', {
       roleName: `guardrail-lambda-base-${env}`,
@@ -256,5 +269,6 @@ export class FoundationStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'FindingsTableName', { value: this.findingsTable.tableName });
     new cdk.CfnOutput(this, 'LambdaBaseRoleArn', { value: this.lambdaBaseRole.roleArn });
     new cdk.CfnOutput(this, 'FargateTaskRoleArn',{ value: this.fargateTaskRole.roleArn });
+    new cdk.CfnOutput(this, 'EventBusName',      { value: this.eventBus.eventBusName });
   }
 }

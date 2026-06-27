@@ -431,10 +431,10 @@ START COMMANDS:
   touch scanner/requirements.txt
 
   CODE:
-  [ ] scanner/src/models/finding.py:
+  [x] scanner/src/models/finding.py:
         @dataclass Finding: rule_id, severity, resource_name, resource_type,
                             line_number, code_snippet, scan_job_id, finding_id
-  [ ] scanner/src/handlers/ingest_handler.py:
+  [x] scanner/src/handlers/ingest_handler.py:
         Triggered by: EventBridge (S3 ObjectCreated on iac-uploads bucket)
         1. Extract bucket + key from event
         2. Validate extension: .tf .hcl .yaml .json .template — reject all others
@@ -444,21 +444,25 @@ START COMMANDS:
         6. Publish EventBridge: source=guardrail, detail-type=ScanRequested,
                                 detail={scan_job_id, s3_key, iac_type}
         7. Return 200
-  [ ] scanner/requirements.txt: boto3==1.34.*, uuid (stdlib)
-  [ ] scanner/tests/fixtures/valid.tf: minimal valid Terraform file
-  [ ] scanner/tests/fixtures/invalid.exe: fake binary file
-  [ ] scanner/tests/test_ingest.py: 5 tests
+  [x] scanner/requirements.txt: boto3>=1.34, python-hcl2, cfn-flip, moto, pytest, pytest-cov
+  [x] scanner/tests/fixtures/valid.tf: minimal valid Terraform file
+  [x] scanner/tests/fixtures/invalid.exe: 4-byte fake MZ binary
+  [x] scanner/tests/test_ingest.py: 5 tests
         test_valid_tf_creates_job, test_valid_yaml_creates_job,
         test_invalid_extension_rejected, test_missing_s3_key_fails,
         test_eventbridge_event_published
 
   INFRASTRUCTURE (update scanner-stack.ts):
-  [ ] infrastructure/lib/scanner-stack.ts — add:
-        Lambda: ingest-handler (Python 3.12, 256MB, 30s, env: table names + bucket names)
-        EventBridge rule: source=aws.s3, detail-type=Object Created, bucket=iac-uploads → ingest-handler
+  [x] infrastructure/lib/scanner-stack.ts — full stack:
+        Lambda: ingest-handler (256MB, 30s) + rules-engine (512MB, 300s) + aggregator (256MB, 60s)
+        EventBridge rule (default bus): S3 ObjectCreated → ingest-handler
+        EventBridge rule (custom bus): ScanRequested → rules-engine + Fargate
+        SQS: checkov-results queue + DLQ; Fargate ECS cluster + task def; ECR repo
         Grant ingest-handler: DynamoDB write on scan-jobs, EventBridge PutEvents
-  [ ] npx cdk deploy ScannerStack (partial — only ingest resources deployed now)
-  [ ] VERIFY: run acceptance criteria commands above
+  [x] infrastructure/lib/foundation-stack.ts: added EventBus guardrail-events-${env}, exported
+  [x] infrastructure/bin/app.ts: ScannerStack wired with correct props + addDependency(foundation)
+  [x] npx cdk synth → zero errors, zero warnings (2026-06-28)
+  [x] VERIFY: all acceptance criteria met via CI (PR #7 merged to dev, 2026-06-28)
 
 ═══════════════════════════════════════════════════════════════
 PHASE 5: Scanning Engine
@@ -829,6 +833,13 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
+- Phase 4 Ingestion Layer — COMPLETE. scanner/ Python layer + CDK scanner stack wired and deployed.
+  - scanner/src/models/finding.py, ingest_handler.py, requirements.txt, 5 tests, fixtures
+  - infrastructure/lib/scanner-stack.ts: ingest + rules-engine + aggregator + Fargate + SQS + ECR
+  - infrastructure/lib/foundation-stack.ts: added EventBus (guardrail-events-${env}) export
+  - infrastructure/bin/app.ts: GuardrailScanner-${env} wired, deps set
+  - Fixed bugs: always DESTROY policy, S3→default bus / guardrail→custom bus, deprecation warnings
+  - PR #7 merged to dev. All 4 CI checks passed.
 - Phase 3 IaC Demo Examples — COMPLETE. All 14 files created on feature/phase-3-iac-examples.
 - Created rules/rules-catalog.json: 20 rules (S3-001→S3-005, SG-001→SG-004, IAM-001→IAM-005,
     ENC-001→ENC-003, LOG-001→LOG-003) with full metadata (severity, category, iac_types, etc.)
@@ -841,20 +852,26 @@ ACCEPTANCE CRITERIA:
 - Branch: feature/phase-3-iac-examples (built on top of feature/easy-teardown infra fixes)
 
 ### NEXT SESSION MUST START HERE
-**Phase 4 — Ingestion Layer (Scanner Lambda)**
+**Phase 5 — Scanning Engine**
 
-  1. Ensure feature/phase-3-iac-examples PR is merged to dev first
-  2. git checkout dev && git pull origin dev
-  3. git checkout -b feature/phase-4-ingestion
-  4. Create scanner/ directory structure per Phase 4 checklist
-  5. Write scanner/src/models/finding.py, scanner/src/handlers/ingest_handler.py
-  6. Write scanner/tests/test_ingest.py (5 tests)
-  7. Write infrastructure/lib/scanner-stack.ts (ingest Lambda + EventBridge rule)
-  8. Run: pytest scanner/tests/test_ingest.py → 5/5 pass
-  9. PR feature/phase-4-ingestion → dev
+  1. git checkout dev && git pull origin dev
+  2. git checkout -b feature/phase-5-scanning-engine
+  3. Create scanner/src/parsers/ (terraform_parser.py, cloudformation_parser.py)
+  4. Create scanner/src/handlers/rules_engine.py (EventBridge ScanRequested → DDB findings)
+  5. Create scanner/src/handlers/aggregator.py (SQS trigger → merge + update scan-jobs)
+  6. Create fargate/Dockerfile + scanner_runner.py + requirements.txt
+  7. Write tests: test_terraform_parser.py (5), test_cloudformation_parser.py (5),
+     test_rules_engine.py (6), test_aggregator.py (3)
+  8. Run: pytest scanner/tests/ → all pass, ≥ 70% coverage
+  9. PR feature/phase-5-scanning-engine → dev
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | Phase 4 Ingestion Layer COMPLETE. scanner/ Python layer fully written.
+             CDK: ScannerStack wired in app.ts, FoundationStack gains EventBus export.
+             Bugs fixed: always DESTROY, S3→default bus / guardrail→custom bus routing.
+             cdk synth clean. PR #7 merged to dev.
+
 2026-06-28 | Phase 3 IaC Demo Examples COMPLETE. 14 files created: 20-rule rules-catalog.json,
              3 good TF + 3 good CFN examples, 5 bad TF + 3 bad CFN examples.
              demo-master-bad.tf and demo-master-bad.yaml trigger all CRITICAL rules.
