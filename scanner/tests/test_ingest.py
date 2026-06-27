@@ -99,23 +99,8 @@ def test_missing_s3_key_fails():
 
 
 def test_eventbridge_event_published():
-    with mock_aws():
-        # Set up fresh DynamoDB and EventBridge
-        ddb = boto3.resource("dynamodb", region_name="us-east-1")
-        ddb.create_table(
-            TableName="scan-jobs-test",
-            KeySchema=[
-                {"AttributeName": "scan_job_id", "KeyType": "HASH"},
-                {"AttributeName": "created_at", "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": "scan_job_id", "AttributeType": "S"},
-                {"AttributeName": "created_at", "AttributeType": "S"},
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-
-        event = _make_event("guardrail-iac-uploads-dev-123", "uploads/infra.tf")
-        response = handler(event, None)
-        # If EventBridge put_events doesn't raise, event was published
-        assert response["statusCode"] == 200
+    # autouse fixture already provides mock_aws + the DDB table.
+    # If EventBridge put_events doesn't raise, the event was published successfully.
+    event = _make_event("guardrail-iac-uploads-dev-123", "uploads/infra.tf")
+    response = handler(event, None)
+    assert response["statusCode"] == 200

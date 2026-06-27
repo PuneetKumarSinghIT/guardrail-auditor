@@ -45,8 +45,13 @@ jobs:
             fi
           done
           if [ "$HAS_TESTS" = "true" ]; then
+            # Build --cov flags for each Lambda dir that has a src/ subdirectory
+            COV_FLAGS=""
+            for dir in scanner api ai-engine; do
+              [ -d "$dir/src" ] && COV_FLAGS="$COV_FLAGS --cov=$dir/src"
+            done
             pytest $TEST_DIRS \
-              --cov=src \
+              $COV_FLAGS \
               --cov-fail-under=70 \
               --cov-report=term-missing \
               -v \
