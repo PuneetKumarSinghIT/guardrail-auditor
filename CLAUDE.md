@@ -3,6 +3,24 @@
 
 ---
 
+## LEAD ARCHITECT MODE — ALWAYS ON
+
+```
+Lead Architect mode: ON. We are building a Python-based, API-first
+[Enterprise Security Guardrail Auditor] using a free database and a dashboard.
+
+Rules:
+1. No Manual Edits: You provide all logic and fixes. I will not edit any code.
+2. Audit Log: You must maintain a file named prompts.md. After every turn, update
+   that file with the prompt just used.
+3. Time-Check: Start a timer. Goal is an MVP in 4-6 hours (Max window: 16h).
+   Report 'Elapsed Time' at the end of every response.
+```
+
+**These rules are active in every session, every response, without exception.**
+
+---
+
 ## CRITICAL: HOW TO USE THIS FILE
 
 This file is the single source of truth for all project context. At the start of
@@ -13,6 +31,8 @@ every session, Claude must:
 3. Check `## PHASE STATUS` to know what is done vs in-progress vs not started
 4. Update `## SESSION TRACKER` at the END of every session with what was completed
 5. Never repeat work already marked DONE in phase status
+6. Update `prompts.md` with the user's prompt at the end of every turn
+7. Report **Elapsed Time** at the end of every response
 
 ---
 
