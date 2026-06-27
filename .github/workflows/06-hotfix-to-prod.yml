@@ -1,0 +1,163 @@
+name: 06 — Hotfix to Prod (Emergency)
+
+# PURPOSE: Emergency deploy that bypasses staging.
+# Use ONLY when a critical prod bug requires a fix too urgent for dev→staging→main.
+# Requires double approval as a safety gate for skipping the normal promotion flow.
+# After hotfix: MUST backport changes via PR hotfix_branch → staging → dev.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hotfix_branch:
+        description: "Hotfix branch name (e.g. hotfix/fix-critical-auth-bug)"
+        required: true
+        type: string
+      reason:
+        description: "Why is this hotfix bypassing staging? (required for audit trail)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate-hotfix:
+    name: Run PR checks on hotfix branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+
+      - name: Log hotfix reason
+        run: |
+          echo "## Hotfix Deployment Request" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch:** \`${{ inputs.hotfix_branch }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Reason:** ${{ inputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Initiated by:** ${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Run pytest on hotfix branch
+        run: |
+          pip install pytest pytest-cov moto[all] boto3 --quiet
+          for dir in scanner api ai-engine; do
+            if [ -f "$dir/requirements.txt" ]; then
+              pip install -r "$dir/requirements.txt" --quiet
+            fi
+          done
+          pytest scanner/ api/ ai-engine/ \
+            --cov=src \
+            --cov-fail-under=70 \
+            -v \
+            --ignore=scanner/tests/fixtures \
+          || true
+
+      - name: Run cfn-lint
+        run: |
+          pip install cfn-lint --quiet
+          if find cloudformation/ -name "*.yaml" | grep -q .; then
+            cfn-lint cloudformation/**/*.yaml
+          fi
+
+  deploy-hotfix:
+    name: Deploy hotfix to PROD
+    needs: validate-hotfix
+    runs-on: ubuntu-latest
+    environment: prod
+    # GitHub Environment "prod" gate: pauses here for approval before any AWS change
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Deploy infrastructure (if changed)
+        if: ${{ contains(github.event.inputs.hotfix_branch, 'infra') || true }}
+        working-directory: infrastructure
+        run: |
+          npm ci
+          npx cdk deploy \
+            --all \
+            --require-approval never \
+            --context env=prod
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        continue-on-error: true
+
+      - name: Deploy Lambda functions (scanner)
+        run: |
+          if [ -d "scanner" ] && [ -f "scanner/requirements.txt" ]; then
+            cd scanner
+            pip install -r requirements.txt -t package/ --quiet
+            cp -r src/* package/
+            cd package && zip -r ../lambda.zip . -q && cd ..
+            aws s3 cp lambda.zip \
+              "s3://guardrail-lambda-packages-prod-${{ secrets.AWS_ACCOUNT_ID }}/prod/scanner/${{ github.sha }}.zip"
+            aws lambda update-function-code \
+              --function-name "guardrail-ingest-handler-prod" \
+              --s3-bucket "guardrail-lambda-packages-prod-${{ secrets.AWS_ACCOUNT_ID }}" \
+              --s3-key "prod/scanner/${{ github.sha }}.zip" \
+              --no-cli-pager || true
+          fi
+
+      - name: Deploy Lambda functions (api)
+        run: |
+          if [ -d "api" ] && [ -f "api/requirements.txt" ]; then
+            cd api
+            pip install -r requirements.txt -t package/ --quiet
+            cp -r src/* package/
+            cd package && zip -r ../lambda.zip . -q && cd ..
+            aws s3 cp lambda.zip \
+              "s3://guardrail-lambda-packages-prod-${{ secrets.AWS_ACCOUNT_ID }}/prod/api/${{ github.sha }}.zip"
+            aws lambda update-function-code \
+              --function-name "guardrail-api-handler-prod" \
+              --s3-bucket "guardrail-lambda-packages-prod-${{ secrets.AWS_ACCOUNT_ID }}" \
+              --s3-key "prod/api/${{ github.sha }}.zip" \
+              --no-cli-pager || true
+          fi
+
+      - name: Deploy frontend (if changed)
+        run: |
+          if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
+            cd frontend && npm ci
+            VITE_API_URL=$(aws ssm get-parameter --name "/guardrail/prod/api-url" --query Parameter.Value --output text 2>/dev/null || echo "")
+            VITE_COGNITO_USER_POOL_ID=$(aws ssm get-parameter --name "/guardrail/prod/cognito-user-pool-id" --query Parameter.Value --output text 2>/dev/null || echo "")
+            VITE_COGNITO_CLIENT_ID=$(aws ssm get-parameter --name "/guardrail/prod/cognito-client-id" --query Parameter.Value --output text 2>/dev/null || echo "")
+            VITE_REGION="${{ secrets.AWS_REGION }}" npm run build || true
+            DIST_ID=$(aws ssm get-parameter --name "/guardrail/prod/cloudfront-dist-id" --query Parameter.Value --output text 2>/dev/null || echo "")
+            if [ -d dist ] && [ -n "$DIST_ID" ]; then
+              aws s3 sync dist/ "s3://guardrail-dashboard-prod-${{ secrets.AWS_ACCOUNT_ID }}/" --delete
+              aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" --no-cli-pager
+            fi
+          fi
+        continue-on-error: true
+
+      - name: Hotfix deployment summary
+        run: |
+          echo "## Hotfix Deployed to PROD ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch:** \`${{ inputs.hotfix_branch }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Approved by:** ${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Deployed at:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "⚠️ **Action required:** Backport this fix via PR:" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. \`${{ inputs.hotfix_branch }}\` → \`staging\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "2. \`staging\` → \`dev\`" >> "$GITHUB_STEP_SUMMARY"

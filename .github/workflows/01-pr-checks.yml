@@ -1,0 +1,108 @@
+name: 01 — PR Checks
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python Tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov moto[all] boto3
+          for dir in scanner api ai-engine; do
+            if [ -f "$dir/requirements.txt" ]; then
+              pip install -r "$dir/requirements.txt"
+            fi
+          done
+
+      - name: Run pytest with coverage
+        run: |
+          pytest scanner/ api/ ai-engine/ \
+            --cov=src \
+            --cov-fail-under=70 \
+            --cov-report=term-missing \
+            -v \
+            --ignore=scanner/tests/fixtures \
+          || true
+        # 'true' fallback: passes until test files exist (Phase 4+)
+        # Remove || true once Phase 4 scanner tests are written
+
+  cfn-lint:
+    name: CloudFormation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint CloudFormation templates
+        run: |
+          if find cloudformation/ -name "*.yaml" -o -name "*.json" | grep -q .; then
+            cfn-lint cloudformation/**/*.yaml || true
+          else
+            echo "No CloudFormation templates found — skipping (Phase 3 will add them)"
+          fi
+
+  tfsec:
+    name: Terraform Security Scan (tfsec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: terraform-examples
+          soft_fail: true
+        # soft_fail: true until terraform-examples/bad/ exists (Phase 3)
+
+  checkov:
+    name: IaC Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Run Checkov on IaC examples
+        run: |
+          if [ -d "cloudformation" ] || [ -d "terraform-examples" ]; then
+            checkov \
+              --directory cloudformation \
+              --directory terraform-examples \
+              --framework terraform,cloudformation \
+              --soft-fail \
+              --output cli \
+              --compact \
+              || true
+          else
+            echo "No IaC example directories found — skipping (Phase 3 will add them)"
+          fi
+        # soft-fail + || true: intentionally bad/ files WILL have findings
+        # Phase 3 will tune --check / --skip-check flags as needed

@@ -1,0 +1,102 @@
+name: 04 — Deploy Frontend (React/Vite)
+
+on:
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - "frontend/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy Frontend — ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deployment environment
+        id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "deploy_env=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_env=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Fetch VITE_ config from SSM
+        id: ssm
+        run: |
+          ENV="${{ steps.env.outputs.deploy_env }}"
+          get_param() {
+            aws ssm get-parameter \
+              --name "/guardrail/${ENV}/$1" \
+              --query Parameter.Value \
+              --output text 2>/dev/null || echo ""
+          }
+
+          echo "VITE_API_URL=$(get_param api-url)" >> "$GITHUB_ENV"
+          echo "VITE_WS_URL=$(get_param websocket-url)" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_USER_POOL_ID=$(get_param cognito-user-pool-id)" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_CLIENT_ID=$(get_param cognito-client-id)" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_IDENTITY_POOL_ID=$(get_param cognito-identity-pool-id)" >> "$GITHUB_ENV"
+          echo "VITE_REGION=${{ secrets.AWS_REGION }}" >> "$GITHUB_ENV"
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ env.VITE_API_URL }}
+          VITE_WS_URL: ${{ env.VITE_WS_URL }}
+          VITE_COGNITO_USER_POOL_ID: ${{ env.VITE_COGNITO_USER_POOL_ID }}
+          VITE_COGNITO_CLIENT_ID: ${{ env.VITE_COGNITO_CLIENT_ID }}
+          VITE_COGNITO_IDENTITY_POOL_ID: ${{ env.VITE_COGNITO_IDENTITY_POOL_ID }}
+          VITE_REGION: ${{ env.VITE_REGION }}
+
+      - name: Sync to S3 dashboard bucket
+        run: |
+          ENV="${{ steps.env.outputs.deploy_env }}"
+          BUCKET="guardrail-dashboard-${ENV}-${{ secrets.AWS_ACCOUNT_ID }}"
+          aws s3 sync frontend/dist/ "s3://${BUCKET}/" \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html"
+          # index.html gets a short TTL so deploys are immediately visible
+          aws s3 cp frontend/dist/index.html "s3://${BUCKET}/index.html" \
+            --cache-control "public, max-age=0, must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          ENV="${{ steps.env.outputs.deploy_env }}"
+          DIST_ID=$(aws ssm get-parameter \
+            --name "/guardrail/${ENV}/cloudfront-dist-id" \
+            --query Parameter.Value \
+            --output text 2>/dev/null || echo "")
+          if [ -n "$DIST_ID" ]; then
+            aws cloudfront create-invalidation \
+              --distribution-id "$DIST_ID" \
+              --paths "/*" \
+              --no-cli-pager
+            echo "CloudFront invalidation triggered for ${DIST_ID}"
+          else
+            echo "No CloudFront distribution found for env=${ENV} — skipping invalidation (Phase 8 will create it)"
+          fi

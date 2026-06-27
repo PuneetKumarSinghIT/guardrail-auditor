@@ -1,0 +1,87 @@
+name: 02 — Deploy Infrastructure (CDK)
+
+on:
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - "infrastructure/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: CDK Deploy — ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deployment environment
+        id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "deploy_env=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_env=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/aws-deploy
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infrastructure
+        run: npm ci
+
+      - name: CDK Synth
+        working-directory: infrastructure
+        run: npx cdk synth --context env=${{ steps.env.outputs.deploy_env }} --all
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Upload CFN artifacts to S3
+        run: |
+          aws s3 sync infrastructure/cdk.out/ \
+            s3://guardrail-cfn-artifacts-${{ steps.env.outputs.deploy_env }}-${{ secrets.AWS_ACCOUNT_ID }}/${{ steps.env.outputs.deploy_env }}/ \
+            --delete \
+            --exclude "*.js" \
+            --exclude "*.d.ts"
+
+      - name: CDK Deploy — all stacks
+        working-directory: infrastructure
+        run: |
+          npx cdk deploy \
+            --all \
+            --require-approval never \
+            --context env=${{ steps.env.outputs.deploy_env }} \
+            --outputs-file cdk-outputs.json
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Print stack outputs
+        if: always()
+        working-directory: infrastructure
+        run: |
+          if [ -f cdk-outputs.json ]; then
+            echo "### CDK Stack Outputs" >> "$GITHUB_STEP_SUMMARY"
+            cat cdk-outputs.json | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for stack, outputs in data.items():
+              print(f'#### {stack}')
+              for k, v in outputs.items():
+                  print(f'- **{k}**: {v}')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || cat cdk-outputs.json >> "$GITHUB_STEP_SUMMARY"
+          fi
