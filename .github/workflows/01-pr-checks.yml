@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 4
 
       - name: Install test dependencies
         run: |
@@ -31,15 +31,22 @@ jobs:
 
       - name: Run pytest with coverage
         run: |
-          pytest scanner/ api/ ai-engine/ \
-            --cov=src \
-            --cov-fail-under=70 \
-            --cov-report=term-missing \
-            -v \
-            --ignore=scanner/tests/fixtures \
-          || true
-        # 'true' fallback: passes until test files exist (Phase 4+)
-        # Remove || true once Phase 4 scanner tests are written
+          HAS_TESTS=false
+          for dir in scanner api ai-engine; do
+            if [ -d "$dir/tests" ] && find "$dir/tests" -name "test_*.py" | grep -q .; then
+              HAS_TESTS=true
+            fi
+          done
+          if [ "$HAS_TESTS" = "true" ]; then
+            pytest scanner/ api/ ai-engine/ \
+              --cov=src \
+              --cov-fail-under=70 \
+              --cov-report=term-missing \
+              -v \
+              --ignore=scanner/tests/fixtures
+          else
+            echo "No test files found yet — skipping (Phase 4+ will add them)"
+          fi
 
   cfn-lint:
     name: CloudFormation Lint
@@ -50,14 +57,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 3
 
       - name: Install cfn-lint
         run: pip install cfn-lint
 
       - name: Lint CloudFormation templates
         run: |
-          if find cloudformation/ -name "*.yaml" -o -name "*.json" | grep -q .; then
+          if [ -d "cloudformation" ] && find cloudformation/ -name "*.yaml" -o -name "*.json" 2>/dev/null | grep -q .; then
             cfn-lint cloudformation/**/*.yaml || true
           else
             echo "No CloudFormation templates found — skipping (Phase 3 will add them)"
@@ -70,11 +77,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run tfsec
-        uses: aquasecurity/tfsec-action@v1.0.0
-        with:
-          working_directory: terraform-examples
-          soft_fail: true
-        # soft_fail: true until terraform-examples/bad/ exists (Phase 3)
+        run: |
+          if [ ! -d "terraform-examples" ]; then
+            echo "terraform-examples/ not found — skipping (Phase 3 will add it)"
+            exit 0
+          fi
+          curl -sL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+          tfsec terraform-examples/ --soft-fail --no-color
+        # soft-fail: bad/ files will have findings by design — that's expected
 
   checkov:
     name: IaC Security Scan (Checkov)
@@ -85,7 +95,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          # no cache: pip — requires requirements.txt to exist; added back in Phase 3
 
       - name: Install Checkov
         run: pip install checkov
@@ -93,9 +103,10 @@ jobs:
       - name: Run Checkov on IaC examples
         run: |
           if [ -d "cloudformation" ] || [ -d "terraform-examples" ]; then
-            checkov \
-              --directory cloudformation \
-              --directory terraform-examples \
+            DIRS=""
+            [ -d "cloudformation" ]      && DIRS="$DIRS --directory cloudformation"
+            [ -d "terraform-examples" ]  && DIRS="$DIRS --directory terraform-examples"
+            checkov $DIRS \
               --framework terraform,cloudformation \
               --soft-fail \
               --output cli \
@@ -104,5 +115,4 @@ jobs:
           else
             echo "No IaC example directories found — skipping (Phase 3 will add them)"
           fi
-        # soft-fail + || true: intentionally bad/ files WILL have findings
-        # Phase 3 will tune --check / --skip-check flags as needed
+        # soft-fail + || true: bad/ files have intentional findings; Phase 3 tunes --check flags
