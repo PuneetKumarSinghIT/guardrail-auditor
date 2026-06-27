@@ -197,7 +197,7 @@ A phase is ONLY complete when its Acceptance Criteria is met — not just when a
 
 ```
 ═══════════════════════════════════════════════════════════════
-PHASE 0: Prerequisites & Repository Setup
+PHASE 0: Prerequisites & Repository Setup          ✅ COMPLETE
 ═══════════════════════════════════════════════════════════════
 GOAL: Every tool, credential, and service access needed to write
       and deploy code is confirmed working before touching any code.
@@ -256,8 +256,8 @@ START COMMANDS:
   npx cdk synth          # verify no errors before deploying
   npx cdk deploy FoundationStack AuthStack --require-approval never
 
-  [ ] infrastructure/bin/app.ts: instantiates FoundationStack + AuthStack
-  [ ] infrastructure/lib/foundation-stack.ts — creates:
+  [x] infrastructure/bin/app.ts: instantiates FoundationStack + AuthStack
+  [x] infrastructure/lib/foundation-stack.ts — creates:
         S3 buckets (5): iac-uploads, scan-reports, dashboard, cfn-artifacts, lambda-packages
           Each: KMS-encrypted, block-all-public-access, versioning on uploads+reports
           scan-reports: S3 Intelligent Tiering (IA after 30d, Archive after 90d)
@@ -270,17 +270,17 @@ START COMMANDS:
         KMS key: 1 project key, auto-rotate annually
         SSM parameters: /guardrail/kms-key-arn, /guardrail/table-*, /guardrail/bucket-*
         IAM roles: LambdaBaseRole (CloudWatch+X-Ray only), FargateTaskRole (SQS+S3+DynamoDB)
-        CloudWatch log groups: /guardrail/lambda/* with 7-day retention
-        Billing alarm: $20 → SNS topic guardrail-billing-alerts → email (SES)
-  [ ] infrastructure/lib/auth-stack.ts — creates:
+        CloudWatch log groups: deferred to Lambda stacks (useCdkManagedLogGroup:true in cdk.json)
+        Billing alarm: $20 → SNS topic guardrail-billing-alerts → email
+  [x] infrastructure/lib/auth-stack.ts — creates:
         Cognito User Pool: email sign-in, password policy (8+ chars, mixed case, numbers)
         Cognito App Client: SPA type, no client secret, allowed OAuth flows
         Cognito Identity Pool: linked to User Pool
         SSM: /guardrail/cognito-user-pool-id, /guardrail/cognito-client-id, /guardrail/cognito-identity-pool-id
-  [ ] infrastructure/CLAUDE.md: CDK L2 construct conventions, tagging rules
-  [ ] npx cdk synth → zero errors, review generated CFN template sizes
-  [ ] npx cdk deploy FoundationStack AuthStack
-  [ ] VERIFY: run all 5 acceptance criteria commands above
+  [x] infrastructure/CLAUDE.md: CDK L2 construct conventions, tagging rules
+  [x] npx cdk synth → zero errors, review generated CFN template sizes
+  [x] npx cdk deploy GuardrailFoundation-dev GuardrailAuth-dev
+  [x] VERIFY: all 5 acceptance criteria passed (2026-06-28)
 
 ═══════════════════════════════════════════════════════════════
 PHASE 2: CI/CD Pipeline (GitHub Actions)
@@ -807,42 +807,49 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- 3-branch enterprise GitHub structure decided and fully documented:
-    dev (default) → staging → main (prod), each mapping to a GitHub Environment
-- CLAUDE.md updated throughout to reflect this model:
-    - New BRANCHING STRATEGY section added (branch rules, code flow, resource naming)
-    - Phase 2 GOAL, ACCEPTANCE CRITERIA, and all 6 workflow checklist items updated
-    - GITHUB ACTIONS "How Deployment Works" diagram and all workflow specs updated
-    - KNOWN DECISIONS table updated with 3-branch rationale
-    - CDK TypeScript coding standards updated with env context + resource naming pattern
-    - 06-promote-to-prod.yml repurposed as 06-hotfix-to-prod.yml (emergency only)
-- Initial repo setup instructions clarified: main committed first, then staging + dev branches created
+- Phase 1 Foundation Infrastructure — COMPLETE. All AWS resources deployed to dev.
+- Created feature branch: feature/phase-1-foundation
+- CDK TypeScript project initialized in infrastructure/
+- infrastructure/bin/app.ts: entry point, instantiates FoundationStack + AuthStack with env context
+- infrastructure/lib/foundation-stack.ts: 5 S3 buckets, 4 DynamoDB tables (with GSIs), KMS key,
+    2 IAM roles (LambdaBaseRole + FargateTaskRole), 18 SSM parameters, billing alarm → SNS → email
+    Note: log groups deferred to Lambda stacks (useCdkManagedLogGroup:true in cdk.json)
+- infrastructure/lib/auth-stack.ts: Cognito User Pool, App Client (SPA, no secret), Identity Pool,
+    4 SSM parameters for Cognito IDs
+- infrastructure/CLAUDE.md: CDK conventions and stack deployment order documented
+- cdk.json updated: entry point changed from bin/infrastructure.ts → bin/app.ts
+- All 5 Phase 1 acceptance criteria verified:
+    ✓ 4 DynamoDB tables: scan-jobs-dev, findings-dev, rules-catalog-dev, ws-connections-dev
+    ✓ 5 S3 buckets: iac-uploads, scan-reports, dashboard, cfn-artifacts, lambda-packages (all -dev-879072872327)
+    ✓ 18 SSM parameters under /guardrail/dev/
+    ✓ KMS key: alias/guardrail-key-dev
+    ✓ Cognito User Pool: guardrail-users-dev (us-east-1_o6VVOv66q)
+- Changes committed to feature/phase-1-foundation branch
 
 ### What Was NOT Done Yet
-- Initial commit not yet pushed to GitHub (git commands provided — Puneet will run them)
-- Branch protection rules not yet configured on GitHub
-- No infrastructure code written yet (Phase 1 not started)
-- No AWS resources deployed yet
+- Branch protection rules not yet confirmed on GitHub (pre-flight check — Puneet to verify)
+- Phase 1 PR not yet opened (feature/phase-1-foundation → dev)
+- Phase 2 CI/CD pipeline not started
 
 ### NEXT SESSION MUST START HERE
-**Phase 1 — Foundation Infrastructure** (on a feature branch off dev)
+**Phase 2 — CI/CD Pipeline (GitHub Actions)**
 
-Before starting Phase 1:
-  1. Confirm git repo is set up: main + staging + dev branches exist on GitHub
-  2. Confirm dev is the default branch (GitHub → Settings → General)
-  3. Confirm branch protection rules are set for all three branches
-  4. Create feature branch: `git checkout dev && git checkout -b feature/phase-1-foundation`
+Before starting Phase 2:
+  1. Open PR: feature/phase-1-foundation → dev on GitHub and merge it
+     (Branch protection may not yet be active — that's OK, Phase 2 will fix it)
+  2. Confirm the CDK outputs recorded below for reference:
+       GuardrailFoundation-dev stack ARN: arn:aws:cloudformation:us-east-1:879072872327:stack/GuardrailFoundation-dev/...
+       GuardrailAuth-dev stack ARN:       arn:aws:cloudformation:us-east-1:879072872327:stack/GuardrailAuth-dev/...
+       Cognito User Pool ID:  us-east-1_o6VVOv66q
+       Cognito Client ID:     2tvnd6b6snvrts77l2os94kgal
+       Identity Pool ID:      us-east-1:97e8b0c7-d3aa-460c-9afb-fc6ad10fa480
 
-Then begin Phase 1:
-  5. `mkdir infrastructure && cd infrastructure`
-  6. `npx aws-cdk@latest init app --language typescript`
-  7. Write `infrastructure/lib/foundation-stack.ts` (S3 buckets, DynamoDB, KMS, IAM, SSM)
-     Remember: all resource names must include env suffix using CDK context pattern
-  8. Write `infrastructure/lib/auth-stack.ts` (Cognito User Pool + Identity Pool)
-  9. Write `infrastructure/bin/app.ts` to instantiate both stacks with env context
-  10. `npx cdk synth --context env=dev` → verify zero errors
-  11. PR feature/phase-1-foundation → dev → merge → auto-deploys to dev environment
-  12. Run all 5 Phase 1 acceptance criteria commands to confirm (check *-dev resource names)
+Then begin Phase 2 on a new feature branch:
+  3. `git checkout dev && git checkout -b feature/phase-2-cicd`
+  4. `mkdir -p .github/workflows .github/actions/aws-deploy`
+  5. Write all 6 workflow files (see Phase 2 checklist)
+  6. Configure GitHub branch protection rules for all 3 branches
+  7. Push + test: PR feature → dev → verify 01-pr-checks.yml triggers
 
 ### Session Log (reverse chronological)
 ```
