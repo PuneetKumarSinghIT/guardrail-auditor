@@ -30,11 +30,20 @@ every session, Claude must:
 1. Read this entire file before writing a single line of code
 2. Check `## SESSION TRACKER` to know exactly where we left off
 3. Check `## PHASE STATUS` to know what is done vs in-progress vs not started
-4. Update `## SESSION TRACKER` at the END of every session with what was completed
-5. Never repeat work already marked DONE in phase status
-6. Update `prompts.md` IMMEDIATELY as the last step of every response — not at end of
-   session, not when asked — append the entry automatically, every single turn
-7. Report **Elapsed Time** at the end of every response
+4. **IMMEDIATELY activate the TOKEN EFFICIENCY PROTOCOL** (see section below):
+   - You (Sonnet) produce the Micro-Task List for the current phase
+   - Spawn Haiku subagents for ALL execution: file writes, edits, git, aws, cdk, pytest, CI
+   - Sonnet only: diagnose failures, approve results, architectural decisions (≤ 5 turns/phase)
+   - Budget: < 3% of 5-hour session, < 0.5% weekly limit per phase
+5. Update `## SESSION TRACKER` at the END of every session with what was completed
+6. Never repeat work already marked DONE in phase status
+7. Update `prompts.md` IMMEDIATELY as the last step of every response — not at end of
+   session, not when asked — Haiku appends this entry automatically
+8. Report **Elapsed Time** at the end of every response
+
+**Reading this file IS the session start trigger. No separate prompt needed.**
+The moment you finish reading CLAUDE.md, produce the Micro-Task List and begin executing
+via the TOKEN EFFICIENCY PROTOCOL defined at the bottom of this file.
 
 ---
 
