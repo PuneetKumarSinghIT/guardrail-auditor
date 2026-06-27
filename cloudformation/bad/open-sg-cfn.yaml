@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  INTENTIONALLY MISCONFIGURED — DO NOT FIX.
+  Triggers: SG-001 (SSH open to world), SG-002 (RDP open to world), SG-003 (All traffic open).
+  Used as a scanner demo target for CloudFormation scanning.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the insecure security group will be created
+    Default: vpc-00000000
+
+Resources:
+
+  # SG-001, SG-002, SG-003: Security group with fully open ingress rules
+  InsecureOpenSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: demo-open-all-insecure-sg
+      GroupDescription: Intentionally insecure security group for demo scanning
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # SG-001: SSH port 22 open to entire internet
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH open to world - INSECURE - SG-001
+        # SG-002: RDP port 3389 open to entire internet
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+          Description: RDP open to world - INSECURE - SG-002
+        # SG-004: HTTP on application server (not load balancer)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP open on app server - INSECURE - SG-004
+        # SG-003: All traffic from anywhere — overrides all other rules
+        - IpProtocol: '-1'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+          Description: All traffic open - CRITICAL - SG-003
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic allowed
+      Tags:
+        - Key: Purpose
+          Value: security-scanner-demo-target
+
+Outputs:
+  SecurityGroupId:
+    Description: ID of the intentionally insecure security group
+    Value: !Ref InsecureOpenSecurityGroup

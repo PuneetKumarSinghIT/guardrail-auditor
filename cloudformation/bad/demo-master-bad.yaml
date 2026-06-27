@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  INTENTIONALLY MISCONFIGURED — DO NOT FIX.
+  PRIMARY CFN DEMO FILE — one upload triggers ALL CRITICAL rules.
+  Triggers: S3-001, S3-002, S3-004, SG-001, SG-002, SG-003,
+            IAM-001, IAM-002, IAM-003, ENC-001, ENC-002, ENC-003, LOG-001, LOG-002.
+  Use this for client demos when they want to see CloudFormation scanning.
+
+Parameters:
+  VpcId:
+    Type: String
+    Default: vpc-00000000
+    Description: VPC for the insecure security group
+
+  DBPassword:
+    Type: String
+    Default: "P@ssw0rd123!"
+    Description: "ENC-003: Hardcoded plaintext DB password — should use Secrets Manager"
+    NoEcho: false
+
+Resources:
+
+  # ─── S3 VIOLATIONS ──────────────────────────────────────────────────────────
+
+  # S3-001, S3-003, S3-004, S3-005: Public bucket, no encryption, no versioning, no logging
+  DemoBadS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-master-bad-bucket"
+      AccessControl: PublicRead
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # S3-002: Public bucket policy
+  DemoBadBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DemoBadS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadAll
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt DemoBadS3Bucket.Arn
+              - !Sub "${DemoBadS3Bucket.Arn}/*"
+
+  # ─── NETWORK VIOLATIONS ─────────────────────────────────────────────────────
+
+  # SG-001, SG-002, SG-003: All ports open to the internet
+  DemoBadSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-open-all-sg"
+      GroupDescription: Demo master bad security group — all ports open
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH open to world - SG-001
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+          Description: RDP open to world - SG-002
+        - IpProtocol: '-1'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+          Description: All traffic - SG-003
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  # ─── IAM VIOLATIONS ─────────────────────────────────────────────────────────
+
+  # IAM-001, IAM-002: Wildcard action + wildcard resource
+  DemoBadIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-insecure-wildcard-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # IAM-003: Root account in trust policy
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+      # IAM-005: Inline policy instead of managed policy
+      Policies:
+        - PolicyName: WildcardInlinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: FullAccountAccess
+                Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  # ─── ENCRYPTION VIOLATIONS ──────────────────────────────────────────────────
+
+  # ENC-002: RDS instance with no encryption + ENC-003: plaintext password
+  DemoBadRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${AWS::StackName}-insecure-db"
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: '8.0'
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: '20'
+      StorageEncrypted: false
+      PubliclyAccessible: true
+      DeletionProtection: false
+    DeletionPolicy: Delete
+
+  # ─── LOGGING VIOLATIONS ─────────────────────────────────────────────────────
+
+  # LOG-001: CloudTrail with logging explicitly disabled
+  DemoBadCloudTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: !Sub "${AWS::StackName}-disabled-trail"
+      S3BucketName: !Ref DemoBadS3Bucket
+      IsLogging: false
+      IncludeGlobalServiceEvents: false
+      IsMultiRegionTrail: false
+    DependsOn: DemoBadBucketPolicy
+
+  # LOG-002: VPC with no flow logs defined
+  DemoBadVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc-no-flow-logs"
+
+Outputs:
+  S3BucketName:
+    Value: !Ref DemoBadS3Bucket
+  SecurityGroupId:
+    Value: !Ref DemoBadSecurityGroup
+  IAMRoleArn:
+    Value: !GetAtt DemoBadIAMRole.Arn
