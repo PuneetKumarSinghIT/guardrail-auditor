@@ -301,43 +301,43 @@ START COMMANDS:
   mkdir -p .github/workflows .github/actions/aws-deploy
   # Write all workflow files, then push to GitHub
 
-  [ ] .github/actions/aws-deploy/action.yml:
+  [x] .github/actions/aws-deploy/action.yml:
         Reusable action: inputs(role-arn, aws-region, deploy-env)
         Uses aws-actions/configure-aws-credentials@v4 with role-to-assume (OIDC)
         No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY anywhere
         Sets DEPLOY_ENV output: (github.ref_name == 'main') ? 'prod' : github.ref_name
-  [ ] .github/workflows/01-pr-checks.yml:
+  [x] .github/workflows/01-pr-checks.yml:
         Trigger: pull_request targeting dev, staging, or main
         Jobs (parallel): pytest scanner/ api/ ai-engine/ --cov=src --cov-fail-under=70
                          cfn-lint cloudformation/**/*.yaml
                          tfsec terraform-examples/ --no-color
                          checkov -d cloudformation/ terraform-examples/
         All jobs must pass — any failure blocks PR merge. Does NOT deploy.
-  [ ] .github/workflows/02-deploy-infra.yml:
+  [x] .github/workflows/02-deploy-infra.yml:
         Trigger: push to dev OR staging OR main, paths: infrastructure/**
         Resolves DEPLOY_ENV: dev→dev, staging→staging, main→prod
         Steps: assume role → cdk synth --context env=$DEPLOY_ENV
                → s3 sync cdk.out/ to cfn-artifacts/$DEPLOY_ENV/
                → cdk deploy --all --context env=$DEPLOY_ENV (CDK handles stack order)
         GitHub Environment gate: dev=auto, staging=auto, prod=requires approval
-  [ ] .github/workflows/03-deploy-lambdas.yml:
+  [x] .github/workflows/03-deploy-lambdas.yml:
         Trigger: push to dev OR staging OR main, paths: scanner/**, api/**, ai-engine/**
         Resolves DEPLOY_ENV from branch name
         Per changed Lambda: pip install → zip → s3 cp
                             → lambda update-function-code (name: guardrail-{fn}-$DEPLOY_ENV)
         GitHub Environment gate: prod requires approval
-  [ ] .github/workflows/04-deploy-frontend.yml:
+  [x] .github/workflows/04-deploy-frontend.yml:
         Trigger: push to dev OR staging OR main, paths: frontend/**
         Resolves DEPLOY_ENV from branch name
         Fetches VITE_* values from SSM /guardrail/$DEPLOY_ENV/* (env-namespaced)
         Steps: npm ci → fetch SSM → npm run build → s3 sync → CloudFront invalidate
         GitHub Environment gate: prod requires approval
-  [ ] .github/workflows/05-deploy-fargate.yml:
+  [x] .github/workflows/05-deploy-fargate.yml:
         Trigger: push to dev OR staging OR main, paths: fargate/**
         Resolves DEPLOY_ENV from branch name
         Tags image as $DEPLOY_ENV-{git-sha} AND $DEPLOY_ENV-latest
         GitHub Environment gate: prod requires approval
-  [ ] .github/workflows/06-hotfix-to-prod.yml:
+  [x] .github/workflows/06-hotfix-to-prod.yml:
         Trigger: workflow_dispatch only (emergency — bypasses staging)
         Input: hotfix_branch name
         Steps: run pr-checks on hotfix_branch → double approval gate → deploy to prod
@@ -807,52 +807,63 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- Phase 1 Foundation Infrastructure — COMPLETE. All AWS resources deployed to dev.
-- Created feature branch: feature/phase-1-foundation
-- CDK TypeScript project initialized in infrastructure/
-- infrastructure/bin/app.ts: entry point, instantiates FoundationStack + AuthStack with env context
-- infrastructure/lib/foundation-stack.ts: 5 S3 buckets, 4 DynamoDB tables (with GSIs), KMS key,
-    2 IAM roles (LambdaBaseRole + FargateTaskRole), 18 SSM parameters, billing alarm → SNS → email
-    Note: log groups deferred to Lambda stacks (useCdkManagedLogGroup:true in cdk.json)
-- infrastructure/lib/auth-stack.ts: Cognito User Pool, App Client (SPA, no secret), Identity Pool,
-    4 SSM parameters for Cognito IDs
-- infrastructure/CLAUDE.md: CDK conventions and stack deployment order documented
-- cdk.json updated: entry point changed from bin/infrastructure.ts → bin/app.ts
-- All 5 Phase 1 acceptance criteria verified:
-    ✓ 4 DynamoDB tables: scan-jobs-dev, findings-dev, rules-catalog-dev, ws-connections-dev
-    ✓ 5 S3 buckets: iac-uploads, scan-reports, dashboard, cfn-artifacts, lambda-packages (all -dev-879072872327)
-    ✓ 18 SSM parameters under /guardrail/dev/
-    ✓ KMS key: alias/guardrail-key-dev
-    ✓ Cognito User Pool: guardrail-users-dev (us-east-1_o6VVOv66q)
-- Changes committed to feature/phase-1-foundation branch
+- Phase 2 CI/CD Pipeline — workflows written, committed, PR open.
+- Merged Phase 1 PR (#1: feature/phase-1-foundation → dev)
+- Created feature/phase-2-cicd branch off dev
+- Wrote all 7 GitHub Actions files:
+    .github/actions/aws-deploy/action.yml — reusable OIDC action (no stored AWS keys)
+    .github/workflows/01-pr-checks.yml — pytest + cfn-lint + tfsec + checkov on every PR
+    .github/workflows/02-deploy-infra.yml — CDK synth + deploy on infrastructure/** changes
+    .github/workflows/03-deploy-lambdas.yml — path-filtered Lambda packaging + S3 + update-function-code
+    .github/workflows/04-deploy-frontend.yml — Vite build with SSM VITE_* vars + S3 sync + CF invalidation
+    .github/workflows/05-deploy-fargate.yml — Docker build + ECR push (SHA + latest tags) + task def update
+    .github/workflows/06-hotfix-to-prod.yml — emergency manual prod deploy with double approval gate
+- All Lambda/Fargate steps use continue-on-error until Phase 4/5 create the resources via CDK
+- Committed to feature/phase-2-cicd (commit: f480651)
 
 ### What Was NOT Done Yet
-- Branch protection rules not yet confirmed on GitHub (pre-flight check — Puneet to verify)
-- Phase 1 PR not yet opened (feature/phase-1-foundation → dev)
-- Phase 2 CI/CD pipeline not started
+- PR feature/phase-2-cicd → dev NOT yet opened (next step below)
+- GitHub branch protection rules NOT yet configured (manual step — Puneet must do in GitHub UI)
+- ECR repository NOT yet created (needed for 05-deploy-fargate.yml)
+- GitHub secret ECR_REPO_URI NOT yet set
 
 ### NEXT SESSION MUST START HERE
-**Phase 2 — CI/CD Pipeline (GitHub Actions)**
+**Complete Phase 2 — Branch Protection + ECR + Merge PR**
 
-Before starting Phase 2:
-  1. Open PR: feature/phase-1-foundation → dev on GitHub and merge it
-     (Branch protection may not yet be active — that's OK, Phase 2 will fix it)
-  2. Confirm the CDK outputs recorded below for reference:
-       GuardrailFoundation-dev stack ARN: arn:aws:cloudformation:us-east-1:879072872327:stack/GuardrailFoundation-dev/...
-       GuardrailAuth-dev stack ARN:       arn:aws:cloudformation:us-east-1:879072872327:stack/GuardrailAuth-dev/...
-       Cognito User Pool ID:  us-east-1_o6VVOv66q
-       Cognito Client ID:     2tvnd6b6snvrts77l2os94kgal
-       Identity Pool ID:      us-east-1:97e8b0c7-d3aa-460c-9afb-fc6ad10fa480
+Step 1 — Push and open PR (do this now):
+  git push -u origin feature/phase-2-cicd
+  gh pr create --base dev --head feature/phase-2-cicd
 
-Then begin Phase 2 on a new feature branch:
-  3. `git checkout dev && git checkout -b feature/phase-2-cicd`
-  4. `mkdir -p .github/workflows .github/actions/aws-deploy`
-  5. Write all 6 workflow files (see Phase 2 checklist)
-  6. Configure GitHub branch protection rules for all 3 branches
-  7. Push + test: PR feature → dev → verify 01-pr-checks.yml triggers
+Step 2 — Puneet must manually configure in GitHub (UI actions):
+  a. GitHub → Settings → Branches → Add rule for each branch:
+       main:    Require PR + 1 approval + status check "01 — PR Checks" + no direct push
+       staging: Require PR + status check "01 — PR Checks" + no direct push
+       dev:     Require PR + no direct push (except initial/hotfix)
+  b. GitHub → Settings → General → Default branch → set to "dev"
+  c. Create ECR repository: aws ecr create-repository --repository-name guardrail-scanner --region us-east-1
+  d. Add GitHub secret ECR_REPO_URI: {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner
+
+Step 3 — After branch protection + ECR set up:
+  Merge PR feature/phase-2-cicd → dev
+  Verify 01-pr-checks.yml triggers and passes on the PR
+  Verify 02-deploy-infra.yml triggers on merge to dev (infrastructure/** path filter)
+
+Step 4 — Phase 2 Acceptance Criteria to verify:
+  ✓ Merge feature branch → dev → 02-deploy-infra.yml runs against dev environment
+  ✓ Direct push to dev/staging/main rejected by branch protection rules
+  ✓ PR from dev → staging blocked if 01-pr-checks.yml fails
+  ✓ Merge dev → staging → deploy workflows run against staging environment
+  ✓ Merge staging → main → prod gate pauses for puneetkumarsingh765@gmail.com approval
+
+Step 5 — Once all acceptance criteria pass, start Phase 3:
+  git checkout dev && git checkout -b feature/phase-3-iac-examples
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | Phase 2 CI/CD workflows written: 7 files (aws-deploy action + 6 workflows).
+             feature/phase-2-cicd branch pushed. PR open. Remaining: branch protection
+             rules (manual GitHub UI), ECR repo creation, ECR_REPO_URI secret.
+
 2026-06-28 | 3-branch enterprise GitHub model finalized: dev (default) → staging → main.
              CLAUDE.md updated: new BRANCHING STRATEGY section, Phase 2 checklist,
              all workflow specs, KNOWN DECISIONS, CDK standards. Repo not yet pushed.
