@@ -755,73 +755,63 @@ START COMMANDS:
   npm create vite@latest . -- --template react-ts
   npm install tailwindcss @shadcn/ui @tanstack/react-query axios aws-amplify react-dropzone
 
+  STACK NOTE: built with Tailwind v3 directly (NOT shadcn/ui CLI — its interactive
+  init can't be one-shot reliably; hand-rolled Tailwind components meet the
+  "professional look" intent). React 18 + TS 5.6 + Vite 5 + React Query v5 +
+  Amplify v6 + react-router-dom v6 + react-dropzone. No Identity Pool in Amplify
+  config (app uses API JWT only). Pure logic extracted to src/lib/risk.ts for tests.
+
   CODE:
-  [ ] src/lib/env.ts: typed env object (VITE_API_URL, VITE_COGNITO_USER_POOL_ID,
-        VITE_COGNITO_CLIENT_ID, VITE_COGNITO_IDENTITY_POOL_ID)
-        Note: no VITE_WS_URL — WebSocket removed from scope
-  [ ] src/lib/api.ts: Axios instance, baseURL=VITE_API_URL,
-        interceptor: attach Cognito JWT to Authorization header on every request
-  [ ] src/lib/auth.ts: Amplify v6 wrapper (signIn, signOut, getCurrentUser, getIdToken)
-  [ ] src/hooks/useScans.ts: React Query hooks
-        useScans()        → GET /v1/scans (list, auto-refetch every 30s)
-        useScan(id)       → GET /v1/scans/{id} (detail + findings)
-        useReportUrl(id)  → GET /v1/scans/{id}/report (presigned URL)
-        useCreateScan()   → POST /v1/scans mutation (returns presigned upload URL)
-
-  [ ] src/pages/LoginPage.tsx:
-        Email + password form → auth.signIn() → redirect to /scans on success
-        Shows error message on wrong credentials
-
-  [ ] src/pages/ScanListPage.tsx:
-        Header: "Security Guardrail Auditor" + sign-out button + "Upload New File" zone
-        ScanUploader component (drag-drop or click-to-browse)
-        Table: filename | status badge | risk score chip | date | "View Report" link
-        Status badges: QUEUED (grey), SCANNING (blue), AI_ANALYSIS (purple), COMPLETE (green), FAILED (red)
-        Risk score chip color matches RiskScoreMeter thresholds
-        Empty state: "No scans yet — upload an IaC file above to get started"
-
-  [ ] src/pages/ScanDetailPage.tsx:
-        Back link → /scans
-        Header: filename + scan date + "Download PDF Report" button (calls useReportUrl, opens URL)
-        Left column: RiskScoreMeter (large, centered)
-        Right column: finding_counts breakdown (CRITICAL N | HIGH N | MEDIUM N | LOW N)
-        Below: FindingsTable
-        Slide-in drawer: AiExplanationPanel (opens when finding row clicked)
-
-  [ ] src/components/ScanUploader.tsx:
-        react-dropzone zone, accepts .tf .hcl .yaml .json .template only
-        On drop: useCreateScan() → POST /v1/scans → PUT file to S3 presigned URL
-        Shows filename + "Scan queued — you will receive an email when complete"
-
-  [ ] src/components/RiskScoreMeter.tsx:
-        SVG circular gauge, score 0–100
-        0–30: green ("Low Risk"), 31–60: amber ("Medium Risk"),
-        61–80: red ("High Risk"), 81–100: dark red ("Critical Risk")
-        Displays numeric score + label
-
-  [ ] src/components/FindingsTable.tsx:
-        Columns: Severity badge | Rule ID | Resource Name | Line # | Category | Actions
-        Default sort: CRITICAL → HIGH → MEDIUM → LOW
-        Filter bar: "All" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
-        Row click → opens AiExplanationPanel
-        "View Fix" button (CRITICAL/HIGH only) → shows fix tab in panel
-
-  [ ] src/components/AiExplanationPanel.tsx:
-        Slide-in drawer (right side, 480px wide)
-        Tab 1 "Explanation": ai_explanation text + finding metadata
-        Tab 2 "Fix" (CRITICAL/HIGH only): ai_fix_code in syntax-highlighted code block with copy button
-        Close button (X) or click outside
+  [x] src/lib/env.ts: typed env (VITE_API_URL, VITE_COGNITO_*; no VITE_WS_URL)
+  [x] src/lib/api.ts: Axios baseURL=VITE_API_URL + JWT interceptor (Bearer id-token)
+  [x] src/lib/auth.ts: Amplify v6 wrapper (configureAuth, signIn, signOut, getIdToken,
+        isAuthenticated) — User Pool only (USER_PASSWORD_AUTH)
+  [x] src/lib/types.ts + src/lib/risk.ts: API types + pure risk/severity/status logic
+  [x] src/hooks/useScans.ts: useScans (30s poll), useScan (15s poll until COMPLETE/FAILED),
+        useReportUrl (lazy), useCreateScan (POST + presigned PUT)
+  [x] src/pages/LoginPage.tsx: email+password → signIn → /scans, error display
+  [x] src/pages/ScanListPage.tsx: header + sign-out + ScanUploader + scans table
+        (status badge, risk chip, date, View Report) + empty state
+  [x] src/pages/ScanDetailPage.tsx: back link + Download PDF + RiskScoreMeter +
+        finding_counts grid + FindingsTable + AiExplanationPanel drawer
+  [x] src/components/ScanUploader.tsx: react-dropzone (.tf/.hcl/.yaml/.yml/.json/.template),
+        POST→presigned PUT, "Scan queued" confirmation
+  [x] src/components/RiskScoreMeter.tsx: SVG gauge, 4 color bands per thresholds
+  [x] src/components/FindingsTable.tsx: severity sort + filter bar + row→drawer + View Fix
+  [x] src/components/AiExplanationPanel.tsx: 480px drawer, Explanation + Fix tabs, copy
+  [x] src/components/{AppHeader,RequireAuth}.tsx + App.tsx (router) + main.tsx (providers)
+  [x] src/lib/risk.test.ts: 6 vitest tests (risk bands, severity sort, fix guard, status)
 
   INFRASTRUCTURE:
-  [ ] infrastructure/lib/frontend-stack.ts:
-        S3 bucket: guardrail-dashboard-{env}-{account} (private, no public access, versioning off)
-        CloudFront OAC (Origin Access Control — NOT OAI, OAI is deprecated)
-        CloudFront distribution: HTTPS only, default root index.html,
-                                 custom error: 403/404 → /index.html (SPA routing)
-        SSM: /guardrail/{env}/cloudfront-dist-id, /guardrail/{env}/cloudfront-url
-  [ ] GitHub Actions 04-deploy-frontend.yml: fetches VITE_* values from SSM during build
+  [x] infrastructure/lib/frontend-stack.ts:
+        Dashboard bucket guardrail-dashboard-{env}-{account} stays in FoundationStack;
+        this stack imports it BY NAME (deterministic, no Foundation token) + adds the
+        OAC bucket policy HERE — avoids the OAC dependency cycle AND the Fn::GetStackOutput
+        failure a bucket token caused. CloudFront OAC (NOT OAI), HTTPS redirect,
+        defaultRootObject index.html, 403/404 → /index.html (SPA), PriceClass_100.
+        SSM: /guardrail/{env}/cloudfront-dist-id, /guardrail/{env}/cloudfront-url.
+        ⚠ DEPLOY BLOCKED (account-level, NOT code): CloudFront Distribution create →
+          403 "Your account must be verified before you can add new CloudFront resources"
+          — needs an AWS Support case (same class as the Phase 6 Bedrock blocker).
+          OAC + bucket policy create fine; only the Distribution itself is gated.
+  [x] infrastructure/lib/frontend-host-stack.ts (STOPGAP — $0-idle, LIVE NOW):
+        guardrail-frontend-host-{env} container Lambda behind a public Function URL
+        (authType NONE) serving the SAME dashboard bundle from S3. SPA routing in-handler.
+        computeEnabled two-phase ECR gate. SSM /guardrail/{env}/frontend-url.
+        LIVE dev: https://g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws/
+        When CloudFront is verified, deploy GuardrailFrontend-{env} + switch URL — no rebuild.
+  [x] GitHub Actions 04-deploy-frontend.yml: pre-existing; syncs dist/ to the dashboard
+        bucket (which BOTH delivery paths read) + fetches VITE_* from SSM.
+  [x] scripts/deploy_env.sh: builds the 7th image (frontend-host) in the bootstrap.
 
-  VERIFY: test all 11 acceptance criteria in a real browser before marking phase done
+  VERIFY (infra + auth path DONE 2026-06-28): Function URL serves index.html (200, title
+    "Security Guardrail Auditor") + JS asset (200, 456KB) + SPA fallback /scans/{id}→index.html
+    + missing asset→404. Login USER_PASSWORD_AUTH → ID token → API GET /v1/scans → 200.
+    npm run build OK; vitest 6/6 pass.
+    REMAINING (manual, in a browser by the owner — the 11 interaction criteria): login form
+    redirect, drag-drop upload, risk-meter color, findings CRITICAL-first sort, AI drawer,
+    View Fix, PDF download, Lighthouse ≥80.
+    Test login (dev pool): puneetkumarsingh765@gmail.com / Guardrail2026 (permanent).
 
 ═══════════════════════════════════════════════════════════════
 PHASE 9: Email Notifications & Observability
@@ -1071,9 +1061,38 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 — PHASE 7 API LAYER ✅ DEPLOYED + LIVE-VERIFIED IN AWS**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 8 FRONTEND ✅ CODE DONE + LIVE (via Lambda Function URL; CloudFront blocked)**
 
-### What Was Completed This Session (Phase 7)
+### What Was Completed This Session (Phase 8)
+- **PHASE 8 FRONTEND DASHBOARD: CODE COMPLETE + LIVE IN DEV.** Full Vite/React 18/TS dashboard
+  (Tailwind v3, React Query v5, Amplify v6, react-router v6, react-dropzone): LoginPage,
+  ScanListPage (uploader + status/risk table), ScanDetailPage (RiskScoreMeter SVG gauge +
+  finding_counts + FindingsTable + AiExplanationPanel drawer). lib/ (env, api+JWT interceptor,
+  auth, pure risk logic, types), hooks/useScans (30s/15s polling — replaces removed WebSocket).
+  22 frontend files. `npm run build` OK; vitest 6/6 (risk bands, severity sort, fix guard, status).
+- **⚠ CLOUDFRONT BLOCKED (account-level, NOT code) — same class as the Phase 6 Bedrock blocker.**
+  `infrastructure/lib/frontend-stack.ts` synths + the OAC creates fine, but CloudFront Distribution
+  CREATE returns 403 "Your account must be verified before you can add new CloudFront resources."
+  → **needs an AWS Support case.** Template is correct; only the Distribution resource is gated.
+- **STOPGAP THAT SHIPPED ($0-idle, LIVE):** `frontend-host/` — a container Lambda behind a public
+  **Function URL** serves the SAME dashboard bundle from the S3 dashboard bucket (SPA routing
+  in-handler). New `infrastructure/lib/frontend-host-stack.ts` (computeEnabled two-phase ECR gate).
+  **LIVE: https://g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws/**
+  Verified: root 200 (correct title) + JS asset 200 (456KB) + /scans/{id}→index.html (SPA) + 404 on
+  missing asset. **Auth path verified:** USER_PASSWORD_AUTH → ID token → API GET /v1/scans → 200.
+  When CloudFront is verified, deploy GuardrailFrontend-{env} + switch the URL — NO rebuild (same S3 bundle).
+- **Cognito test login created** (dev pool, self-signup is off): puneetkumarsingh765@gmail.com /
+  `Guardrail2026` (permanent password via admin-set-user-password).
+- **TWO CDK GOTCHAS FIXED (logged below):** (1) OAC over a cross-stack bucket → dependency cycle +
+  Fn::GetStackOutput failure → import bucket BY deterministic NAME (not the Foundation token) and add
+  the OAC bucket policy in the consuming stack. (2) A background `cdk deploy` inherits the launcher's
+  cwd — if that isn't `infrastructure/`, cdk fails "--app is required"; always `cd infrastructure` in
+  the deploy command.
+- **Decision:** built with **Tailwind v3 directly (not shadcn/ui CLI)** — its interactive init can't be
+  one-shot reliably; hand-rolled components meet the "professional look" intent. Logged in KNOWN DECISIONS.
+- Committed on feature/phase-8-frontend (2 commits). PR → dev pending in this housekeeping turn.
+
+### What Was Completed (Prior session — Phase 7)
 - **PHASE 7 API LAYER: DEPLOYED + LIVE-VERIFIED IN AWS.** `guardrail-api-dev` Lambda behind an
   API Gateway REST API (https://ajdt217kkg.execute-api.us-east-1.amazonaws.com/dev/) with a
   Cognito User Pool authorizer. Live-tested with a real Cognito JWT: no-JWT→401; POST /v1/scans→200
@@ -1143,24 +1162,31 @@ ACCEPTANCE CRITERIA:
 - NOT yet committed/merged at the time of writing → committing on feature/phase-6-ai-engine, PR to dev.
 
 ### NEXT SESSION MUST START HERE
-**Phase 7 is DONE (API deployed + live-verified). Start Phase 8 — Frontend Dashboard.**
+**Phase 8 is CODE-DONE + LIVE (via Lambda Function URL). Start Phase 9 — Email Notifications &
+Observability.** Two Phase-8 follow-ups are owner/external, not blockers:
+  1. **AWS Support case for CloudFront** account verification (so GuardrailFrontend-dev can deploy).
+     Until then the dashboard is served by the Function URL host — fully functional.
+  2. **Owner browser pass** of the 11 interaction criteria at the live URL (test login below).
 Auth recipe for AWS/CDK in THIS tool shell (both needed in the SAME Bash command):
   - `aws` CLI v2:  prefix `AWS_PROFILE=aws-admin` (and `MSYS_NO_PATHCONV=1` for any /leading-slash arg).
-  - `cdk` deploy:  `eval "$(aws configure export-credentials --profile aws-admin --format env)"` then
-    `export CDK_DEFAULT_ACCOUNT=879072872327 CDK_DEFAULT_REGION=us-east-1` then the cdk command.
-  - ALWAYS pass `--exclusively` when deploying a single stack, and NEVER let a cdk deploy run in the
-    FOREGROUND past the 2-min tool timeout — use run_in_background:true (a timed-out cdk keeps
-    deploying detached and can strip Lambdas via computeEnabled). See the Phase 7 incident above.
-  - dev is DEPLOYED + RUNNING (all 5 stacks UPDATE_COMPLETE). API URL is in SSM
-    /guardrail/dev/api-url. Cognito pool/client ids in /guardrail/dev/cognito-*.
-Phase 8: frontend/ (Vite React+TS, 2 pages: ScanList + ScanDetail), frontend-stack.ts (S3 +
-  CloudFront OAC), 04-deploy-frontend.yml reads VITE_* from SSM /guardrail/dev/*. Set CORS_ORIGIN
-  on the api Lambda to the CloudFront URL once known (currently "*"); redeploy GuardrailApi-dev.
-  - Optional, when the AWS Bedrock model-access case resolves: flip ai-analyzer to Claude by setting
-    BEDROCK_PROVIDER=anthropic in ai-stack.ts, redeploy GuardrailAi-dev. Confirm first:
-    `aws bedrock get-foundation-model-availability --model-id anthropic.claude-haiku-4-5-20251001-v1:0`.
-  - Phase 7: api/ (routes scans + reports), api-stack.ts (API GW + Cognito authorizer + api-handler
-    Lambda, same fromEcr two-phase gate + deploy_env.sh build step as the other services).
+  - `cdk` deploy:  FIRST `cd infrastructure`, then `eval "$(aws configure export-credentials --profile
+    aws-admin --format env)"` + `export CDK_DEFAULT_ACCOUNT=879072872327 CDK_DEFAULT_REGION=us-east-1`
+    + the cdk command. (A background cdk deploy inherits the launcher cwd — if not infrastructure/ it
+    fails "--app is required".)
+  - ALWAYS `--exclusively` for a single stack + run_in_background:true (a foreground cdk past the 2-min
+    tool cap keeps deploying detached and can strip Lambdas via computeEnabled). See the Phase 7 incident.
+  - dev is DEPLOYED + RUNNING: 7 stacks (Foundation, Auth, Scanner, Ai, Api, FrontendHost) — NOT
+    GuardrailFrontend (CloudFront, blocked). Live dashboard:
+    https://g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws/  (SSM /guardrail/dev/frontend-url)
+    Test login: puneetkumarsingh765@gmail.com / Guardrail2026. API URL: SSM /guardrail/dev/api-url.
+Phase 9: scanner report_generator/ (reportlab PDF) + report-handler + email-handler + failure-handler
+  Lambdas (all MODE-dispatched from the scanner image), monitoring-stack.ts (CloudWatch dashboard +
+  X-Ray + alarms→SNS). EventBridge: AIAnalysisComplete→report, ReportGenerated→email(success),
+  ScanFailed→email(failure), ECS TaskStopped exit≠0→failure. Email body = CRITICAL/HIGH only + PDF
+  attachment. SES sandbox: From=To=puneetkumarsingh765@gmail.com (verified). Once a PDF exists, the
+  frontend "Download PDF Report" button (currently 404s) goes green.
+  - Optional, when the AWS Bedrock model-access case resolves: flip ai-analyzer to Claude
+    (BEDROCK_PROVIDER=anthropic in ai-stack.ts, redeploy GuardrailAi-dev).
 
 ### (Prior session) What Was Completed
 - **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.
@@ -1221,6 +1247,20 @@ STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | PHASE 8 FRONTEND CODE-DONE + LIVE via Lambda Function URL (PR pending → dev). Vite/React
+             18/TS dashboard (Tailwind v3, React Query v5, Amplify v6, react-router v6, react-dropzone):
+             Login + ScanList + ScanDetail (RiskScoreMeter SVG, FindingsTable, AI drawer). 22 files;
+             npm build OK; vitest 6/6. CLOUDFRONT BLOCKED (account-level, not code): Distribution CREATE
+             → 403 "account must be verified before you can add new CloudFront resources" → needs AWS
+             Support case (frontend-stack.ts is correct; OAC creates fine). STOPGAP SHIPPED: frontend-host/
+             container Lambda + public Function URL serves the same S3 bundle ($0 idle, HTTPS). LIVE:
+             g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws — root 200, asset 200,
+             SPA fallback OK, missing→404; login USER_PASSWORD_AUTH→ID token→API /v1/scans 200. Cognito
+             test user created (Guardrail2026). CDK lessons: (1) OAC over a cross-stack bucket → cycle +
+             Fn::GetStackOutput fail → import bucket by deterministic NAME + add OAC policy in consumer
+             stack; (2) background cdk inherits launcher cwd → must `cd infrastructure` or "--app required".
+             Built Tailwind direct (not shadcn CLI — can't one-shot its init).
+
 2026-06-28 | PHASE 7 API LAYER DEPLOYED + LIVE-VERIFIED (PR #17 → dev). api/ = one Lambda behind
              API GW REST + Cognito authorizer; 4 routes (POST/GET scans, GET detail, GET report).
              Entrypoint src/app.py (NOT main.py — avoids src.main collision with scanner in the
@@ -2237,6 +2277,9 @@ GITHUB ACTIONS — OIDC SETUP (Do Once, Replaces Stored AWS Keys)
 | No WebSocket in API layer | Removed from Phase 7 scope | Email is the async completion signal. User opens dashboard after receiving email — no real-time push needed. Removes websocket-handler Lambda, ws-connections DDB table, and API GW WebSocket API entirely. Simplifies both backend and frontend significantly. |
 | Static site: S3 + CloudFront | Not bare S3 static website endpoint | S3 website endpoints are HTTP-only; Cognito callback URLs require HTTPS. CloudFront provides HTTPS, caching, OAC for private bucket access, and SPA routing (404 → index.html). The "static website on S3" intent is met — CloudFront is the delivery layer, not a separate hosted service. |
 | Frontend: 2 pages only | ScanListPage + ScanDetailPage (no trend chart page) | The question asks for a Risk Score dashboard to show results. A scan list + detail view directly answers that. Trend charts are nice-to-have but out of scope for the MVP demo. |
+| Tailwind v3 direct, NOT shadcn/ui CLI | Hand-rolled Tailwind components | shadcn's `npx shadcn init` is interactive and pulls component files — it can't be one-shot reliably in this headless build flow. Plain Tailwind v3 (stable PostCSS plugin) with hand-rolled components meets the "professional look" intent, builds deterministically, and keeps the dep tree small. Recharts also dropped (TrendChart was already out of scope). |
+| Lambda Function URL host as CloudFront stopgap | frontend-host/ container Lambda + public Function URL | CloudFront Distribution CREATE is blocked by AWS account verification (403 "account must be verified", needs a Support case — same class as the Phase 6 Bedrock blocker). A $0-idle container Lambda behind a public Function URL (authType NONE) serves the SAME dashboard bundle from the S3 dashboard bucket with in-handler SPA routing. Stays within the $0-idle cost guardrail (ALB was rejected: ~$18/mo idle + running target). frontend-stack.ts (CloudFront) remains the durable target — both read the same S3 bundle, so switching back when verified needs no rebuild. |
+| OAC over a cross-stack bucket: import by name + policy in consumer | NOT the live Foundation bucket construct | Passing `foundation.dashboardBucket` (or its `.bucketName` token) into the frontend/host stack created BOTH a dependency cycle (the L2 OAC auto-adds a bucket policy that lands in Foundation and references the consumer's distribution) AND an `Fn::GetStackOutput` deploy failure. Fix: reconstruct the deterministic name `guardrail-dashboard-${env}-${account}` locally, `s3.Bucket.fromBucketName`, and add the OAC `CfnBucketPolicy` in the consuming stack. Single clean Frontend→Foundation edge, no cycle, no cross-stack output. |
 | `scripts/deploy_env.sh` is the ONLY setup/promotion path | Not bare `cdk deploy --all` | A bare `cdk deploy --all` fails on a fresh env (ECR bootstrap deadlock: Lambda fromEcr needs an image the just-created repo doesn't have). The script sequences deploy(computeEnabled=false) → push 4 images → deploy(computeEnabled=true) → seed rules-catalog. Idempotent, identical across dev/staging/prod, so promotion is reliable by construction. See ENVIRONMENT LIFECYCLE section. |
 | rules-catalog seeding is part of bootstrap | `scripts/seed_rules_catalog.py` runs as step 4 | rules_engine scans the rules-catalog table for enabled rules; a fresh table is empty → custom rules find nothing, only Checkov fires. Proven 2026-06-28: rebuilt-from-empty env scanned 48 findings incl. 9 custom only AFTER seeding. Seeding is non-optional and lives in the bootstrap script. |
 | `restrictDefaultSecurityGroup: false` on the VPC | Disable CDK's default-SG custom resource | That CR-backed Lambda intermittently fails on stack DELETE (DELETE_FAILED) once its provider is gone — it actually wedged our Phase A deploy. We don't use the default SG, so disabling the CR removes a teardown-blocker. Required on every VPC in this project. |

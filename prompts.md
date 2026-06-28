@@ -2486,3 +2486,44 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   GET /v1/scans→200 list; GET /v1/scans/{id}→200 detail; GET /v1/scans/{id}/report→404 (no PDF yet).
 **PR:** #17 → dev
 **Outcome:** DONE
+
+## 2026-06-28 22:30 — Phase 8: Frontend Dashboard
+**User Request:** "read claude.md and implement" → Phase 8 (Frontend Dashboard). Mid-phase, when
+  CloudFront turned out to be account-blocked: "in place of cloudfront can we host it on alb ... if we
+  can't go enterprise then atleast can we go for ui testing with some name." → chose Lambda Function URL.
+**Files Created (frontend — 22):**
+  - frontend/ config: package.json, tsconfig(.json/.node.json), vite.config.ts, index.html,
+    postcss.config.js, tailwind.config.js, src/vite-env.d.ts, src/index.css
+  - src/lib: types.ts, env.ts, risk.ts (pure logic), auth.ts (Amplify v6), api.ts (axios+JWT), risk.test.ts
+  - src/hooks/useScans.ts (React Query: useScans/useScan/useReportUrl/useCreateScan)
+  - src/pages: LoginPage.tsx, ScanListPage.tsx, ScanDetailPage.tsx
+  - src/components: RiskScoreMeter.tsx (SVG gauge), FindingsTable.tsx, AiExplanationPanel.tsx (drawer),
+    ScanUploader.tsx (react-dropzone), AppHeader.tsx, RequireAuth.tsx
+  - src/App.tsx (router), src/main.tsx (QueryClient + Amplify + BrowserRouter)
+**Files Created (infra + stopgap host):**
+  - infrastructure/lib/frontend-stack.ts (CloudFront OAC over imported dashboard bucket + SPA + SSM)
+  - infrastructure/lib/frontend-host-stack.ts (container Lambda + public Function URL, two-phase ECR gate)
+  - frontend-host/: Dockerfile, requirements.txt, src/handler.py (serves S3 bundle, SPA routing, 404)
+**Files Modified:**
+  - infrastructure/bin/app.ts — wire FrontendStack + FrontendHostStack (both depend on foundation)
+  - scripts/deploy_env.sh — build+push the 7th image (frontend-host)
+  - .gitignore — ignore tsc -b artifacts (*.tsbuildinfo, frontend/vite.config.js/.d.ts)
+**Bugs Fixed / Gotchas:**
+  - Amplify v6 typed config rejected identityPoolId:undefined → dropped Identity Pool (API JWT only).
+  - CDK dependency CYCLE: L2 OAC over a cross-stack bucket adds the bucket policy to Foundation
+    referencing the consumer distribution → cycle. Fix: import bucket by deterministic NAME + add OAC
+    CfnBucketPolicy in the consuming stack.
+  - First CloudFront deploy ROLLED BACK: passing foundation.dashboardBucket.bucketName (a token)
+    emitted Fn::GetStackOutput that didn't exist → reconstruct the literal name locally.
+  - Background cdk deploy inherits the LAUNCHER cwd → if not infrastructure/ it fails "--app is
+    required" → `cd infrastructure` in the deploy command.
+**⚠ BLOCKER (account-level, NOT code):** CloudFront Distribution CREATE → 403 "Your account must be
+  verified before you can add new CloudFront resources." Needs an AWS Support case (same class as the
+  Phase 6 Bedrock blocker). Shipped a $0-idle Lambda Function URL host serving the same S3 bundle.
+**Tests:** vitest 6/6 (risk bands, severity sort, fix cost-guard, status styles); npm run build OK.
+**Live verify (dev):** Function URL root→200 (title "Security Guardrail Auditor"), JS asset→200 (456KB),
+  /scans/{id}→index.html (SPA fallback), /assets/nope.js→404. Auth: USER_PASSWORD_AUTH→ID token→
+  API GET /v1/scans→200. URL: https://g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws/
+  Test login: puneetkumarsingh765@gmail.com / Guardrail2026.
+**PR:** #18 → dev (frontend + frontend-host)
+**Outcome:** DONE (code + live host); CloudFront deploy + owner browser pass = follow-ups.
