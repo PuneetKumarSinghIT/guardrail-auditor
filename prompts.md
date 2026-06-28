@@ -2634,3 +2634,36 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   billing $0.95 MTD. DR synth us-west-2 clean. checkov 381 pass / 0 fail w/ baseline.
 **PR:** (housekeeping turn) → dev
 **Outcome:** DONE — Phase 11 free-tier scope complete; all 12 phases (0-11) complete. Paid hardening deferred by owner decision.
+
+## 2026-06-29 01:00 — Post-merge fixes: CI deploy, API Gateway dashboard, PDF/upload SigV4, README
+**User Request:** After PR #21 merged, the dev infra-deploy CI failed → "check and fix". Then: replace
+  CloudFront with API Gateway hosting the Lambda (+ document the reason); expand README with manual AWS
+  setup (Cognito/SES/Bedrock/CloudFront/account activation), folder→UI live testing + sample folders,
+  and SES To/From email config; fix the broken PDF download link; document the infra implementation +
+  reasons in README + CLAUDE.md. Raise the PR and merge it.
+**Root causes found + fixed:**
+  1. CI `cdk deploy --all` failed on GuardrailFrontend — CloudFront 403 (account-blocked) + duplicate
+     `/guardrail/{env}/cloudfront-url` SSM param (Foundation + frontend both created it). Pre-existing.
+  2. PDF download (and browser upload) returned HTTP 400 — boto3 default SigV2 presign is rejected by
+     the SSE-KMS buckets ("require AWS Signature Version 4"). Verified via live curl + S3 error body.
+  3. Frontend `window.open` in a useEffect was popup-blocked → download did nothing.
+**Files Modified:**
+  - infrastructure/bin/app.ts — gate FrontendStack behind `--context cloudfrontEnabled=true` (default off).
+  - infrastructure/lib/frontend-stack.ts — remove the duplicate /cloudfront-url SSM param (Foundation owns it).
+  - infrastructure/lib/frontend-host-stack.ts — replace Lambda Function URL with an API Gateway HTTP API
+    ($default route → host Lambda); SSM frontend-url now the API GW URL.
+  - api/src/routes/reports.py — S3 client `signature_version=s3v4` + ResponseContentDisposition/Type.
+  - api/src/routes/scans.py — S3 client `signature_version=s3v4` (fixes browser upload to KMS bucket).
+  - frontend/src/pages/ScanDetailPage.tsx — anchor-click download (not popup-blocked window.open).
+  - frontend/src/hooks/useScans.ts — poll until REPORT_COMPLETE/FAILED (was COMPLETE).
+  - frontend/src/lib/{types.ts,risk.ts} — add REPORT_COMPLETE status + style.
+  - README.md — manual Console setup, SES To/From email config, folder→UI live testing + sample-folder
+    table, infra decisions+reasons (API GW vs CloudFront, SigV4). Tech-stack + architecture notes updated.
+  - CLAUDE.md — 4 new KNOWN DECISIONS (API GW host, CloudFront gate, SigV4 presign, anchor download),
+    SESSION TRACKER post-merge-fixes block, Session Log.
+**Deploy + verify (live dev):** `cdk deploy --all` → exit 0, 7 stacks ✅ (CI fix proven). API GW dashboard
+  root/asset/SPA 200, missing 404. Rebuilt+pushed api image (Lambda updated); report GET → 200
+  application/pdf attachment %PDF 8886B; upload PUT → 200. Rebuilt+synced frontend bundle (real dev VITE_*);
+  live dashboard serves new bundle. api pytest 8/8; frontend vitest 6/6 + build OK.
+**PR:** (this housekeeping turn) → dev, merged (user-authorized).
+**Outcome:** DONE — CI green, dashboard on API Gateway, upload + PDF download working, README + CLAUDE.md documented.

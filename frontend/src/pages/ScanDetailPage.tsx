@@ -24,10 +24,22 @@ export function ScanDetailPage() {
 
   const report = useReportUrl(id, wantReport);
 
-  // When the user clicks Download and the presigned URL resolves, open it once.
+  // When the user clicks Download and the presigned URL resolves, trigger the
+  // download via a programmatic anchor click. NOTE: window.open() here was
+  // unreliable — it runs in a useEffect (an async continuation, not the click's
+  // user-gesture stack), so browser popup blockers silently killed it ("download
+  // does nothing"). An anchor click is treated as a download, not a popup, so it
+  // is not blocked. The API's presigned URL sets Content-Disposition: attachment,
+  // so S3 serves it as a named .pdf download (the cross-origin `download` attr is
+  // ignored, hence the server-side header).
   useEffect(() => {
     if (wantReport && report.data?.report_url) {
-      window.open(report.data.report_url, "_blank", "noopener");
+      const a = document.createElement("a");
+      a.href = report.data.report_url;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       setWantReport(false);
     }
   }, [wantReport, report.data]);

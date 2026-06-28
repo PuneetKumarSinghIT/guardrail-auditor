@@ -101,6 +101,8 @@ export function statusStyle(status: ScanStatus): StatusStyle {
       return { label: "AI Analysis", className: "bg-purple-100 text-purple-700" };
     case "COMPLETE":
       return { label: "Complete", className: "bg-green-100 text-green-700" };
+    case "REPORT_COMPLETE":
+      return { label: "Complete", className: "bg-green-100 text-green-700" };
     case "FAILED":
       return { label: "Failed", className: "bg-red-100 text-red-700" };
     default:

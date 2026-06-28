@@ -1114,9 +1114,42 @@ ACCEPTANCE CRITERIA (free-tier scope — all PASS, live-verified 2026-06-29):
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 29, 2026 — PHASE 11 PRODUCTION HARDENING ✅ FREE-TIER SCOPE COMPLETE + LIVE-VERIFIED**
+**MOST RECENT SESSION: June 29, 2026 — PHASE 11 (free-tier) ✅ + POST-MERGE FIXES (CI deploy, API Gateway dashboard, PDF/upload SigV4) ✅ LIVE-VERIFIED**
 
-### What Was Completed This Session (Phase 11 — free-tier scope)
+### What Was Completed This Session (post-Phase-11 fixes — after PR #21 merged)
+- **CI deploy fix (02-deploy-infra was RED on dev):** `cdk deploy --all` failed on GuardrailFrontend
+  (CloudFront) — both the account-verification **403** AND a **duplicate `/guardrail/{env}/cloudfront-url`
+  SSM param** (Foundation + frontend both created it). Pre-existing (also failed on #18/#20), not from
+  Phase 11. Fix: **gate FrontendStack out** of the default app (`bin/app.ts`, `--context
+  cloudfrontEnabled=true` to opt in) + remove the duplicate param from frontend-stack.ts (Foundation
+  owns it; 04 workflow overwrites with the live URL). Proven: `cdk deploy --all` → exit 0, all 7 stacks ✅.
+- **Dashboard now served by API Gateway → Lambda (owner request: replace CloudFront):** added an
+  **API Gateway HTTP API** (`guardrail-frontend-{env}`) with a `$default` route → the frontend-host
+  Lambda (replaced the Function URL). Payload format 2.0 → handler's `rawPath` unchanged. WHY: CloudFront
+  is account-blocked; API GW has no such gate, is $0-idle, HTTPS, fits the serverless stack. Live:
+  **https://zdyg6ystdk.execute-api.us-east-1.amazonaws.com** — root 200 (correct title), SPA route 200,
+  JS asset 200 (456KB), missing→404. CloudFront stack retained but gated off.
+- **PDF download was broken — ROOT CAUSE = SigV2 presign on a KMS bucket:** S3 returned `HTTP 400
+  InvalidArgument: …require AWS Signature Version 4`. boto3 defaulted to SigV2. Fixed by pinning the S3
+  client to **`signature_version="s3v4"`** in `api/src/routes/reports.py` AND `scans.py` — the SAME bug
+  also broke the **browser upload** (presigned PUT to the KMS uploads bucket), i.e. the "push a file to
+  the UI" path. Report GET also now sets `Content-Disposition: attachment` + `application/pdf`. Frontend:
+  replaced the popup-blocked `window.open`-in-useEffect with a programmatic **anchor click**, and fixed
+  useScan to poll until **REPORT_COMPLETE/FAILED** (was stopping at COMPLETE, before AI+report exist);
+  added REPORT_COMPLETE to the status type/style. Rebuilt+pushed the **api image** (Lambda updated) and
+  rebuilt+synced the **frontend bundle** (with real dev VITE_* config) to the dashboard bucket.
+  **LIVE-VERIFIED:** report GET → 200 application/pdf, `attachment; filename="…-guardrail-report.pdf"`,
+  8886B %PDF-; upload PUT → 200; live dashboard serves the new bundle. api pytest 8/8, frontend vitest 6/6.
+- **README massively expanded** (owner request): manual AWS Console setup (account verification/quota,
+  Cognito user creation, Bedrock model access, SES sandbox verification), **SES To/From email config**
+  (where in code — foundation-stack secretObjectValue / Secrets Manager — + how to change), **folder→UI
+  live testing** flow (drag-drop from the sample folders, no scripts) with a sample-data folder table,
+  CLI upload alternative, and the **infra decisions + reasons** (API GW over CloudFront; SigV4 presign).
+- **Files changed (post-merge fixes):** bin/app.ts (gate), frontend-stack.ts (drop dup SSM),
+  frontend-host-stack.ts (HTTP API), api/src/routes/{reports,scans}.py (SigV4 + content-disposition),
+  frontend/src/{lib/types.ts,lib/risk.ts,hooks/useScans.ts,pages/ScanDetailPage.tsx}, README.md, CLAUDE.md.
+
+### What Was Completed Earlier This Session (Phase 11 — free-tier scope)
 - **OWNER DECISION:** demo/portfolio account → implement ONLY the FREE / $0-idle Phase 11 hardening;
   keep the full enterprise-prod checklist verbatim but mark every paid item `[defer:$]` with its
   cost + the free substitute in use. "Free-tier where feasible" is now the standing rule. The paid
@@ -1416,6 +1449,22 @@ STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
+2026-06-29 | POST-MERGE FIXES (after PR #21). (1) CI 02-deploy-infra was RED: bare `cdk deploy --all`
+             failed on GuardrailFrontend (CloudFront 403 + duplicate /cloudfront-url SSM param owned by
+             Foundation). Pre-existing (also #18/#20). Fixed: GATE FrontendStack out of the default app
+             (bin/app.ts cloudfrontEnabled flag) + drop the dup param from frontend-stack.ts. `cdk deploy
+             --all` → exit 0, 7 stacks ✅. (2) Dashboard moved CloudFront → API GATEWAY HTTP API →
+             frontend-host Lambda (owner request; CloudFront account-blocked). Live zdyg6ystdk.execute-api…
+             root/asset/SPA 200, missing 404. (3) PDF DOWNLOAD broken = SigV2 presign on a KMS bucket
+             (S3 400 "require SigV4"); same bug broke browser UPLOAD (presigned PUT). Fixed: pin S3 client
+             to signature_version=s3v4 in api reports.py + scans.py; report GET adds Content-Disposition
+             attachment + application/pdf; frontend uses anchor-click (not popup-blocked window.open) +
+             polls to REPORT_COMPLETE. Rebuilt+pushed api image (Lambda updated) + rebuilt+synced frontend
+             bundle. VERIFIED: report GET 200 %PDF 8886B attachment; upload PUT 200; dashboard new bundle
+             live. api pytest 8/8, vitest 6/6. (4) README hugely expanded: manual Console setup (acct
+             verification/quota, Cognito user, Bedrock access, SES verify), SES To/From email config
+             (foundation secret + how to change), folder→UI live drag-drop testing + sample-folder table,
+             infra decisions+reasons (API GW vs CloudFront, SigV4). CLAUDE.md KNOWN DECISIONS += 4 rows.
 2026-06-29 | PHASE 11 PRODUCTION HARDENING — FREE-TIER SCOPE COMPLETE + LIVE-VERIFIED (dev). Owner
              decision: demo app → ship ONLY free / $0-idle items; keep the full enterprise checklist
              verbatim with every paid item marked [defer:$] + cost + free substitute. DEPLOYED (cdk
@@ -2488,7 +2537,10 @@ GITHUB ACTIONS — OIDC SETUP (Do Once, Replaces Stored AWS Keys)
 | Static site: S3 + CloudFront | Not bare S3 static website endpoint | S3 website endpoints are HTTP-only; Cognito callback URLs require HTTPS. CloudFront provides HTTPS, caching, OAC for private bucket access, and SPA routing (404 → index.html). The "static website on S3" intent is met — CloudFront is the delivery layer, not a separate hosted service. |
 | Frontend: 2 pages only | ScanListPage + ScanDetailPage (no trend chart page) | The question asks for a Risk Score dashboard to show results. A scan list + detail view directly answers that. Trend charts are nice-to-have but out of scope for the MVP demo. |
 | Tailwind v3 direct, NOT shadcn/ui CLI | Hand-rolled Tailwind components | shadcn's `npx shadcn init` is interactive and pulls component files — it can't be one-shot reliably in this headless build flow. Plain Tailwind v3 (stable PostCSS plugin) with hand-rolled components meets the "professional look" intent, builds deterministically, and keeps the dep tree small. Recharts also dropped (TrendChart was already out of scope). |
-| Lambda Function URL host as CloudFront stopgap | frontend-host/ container Lambda + public Function URL | CloudFront Distribution CREATE is blocked by AWS account verification (403 "account must be verified", needs a Support case — same class as the Phase 6 Bedrock blocker). A $0-idle container Lambda behind a public Function URL (authType NONE) serves the SAME dashboard bundle from the S3 dashboard bucket with in-handler SPA routing. Stays within the $0-idle cost guardrail (ALB was rejected: ~$18/mo idle + running target). frontend-stack.ts (CloudFront) remains the durable target — both read the same S3 bundle, so switching back when verified needs no rebuild. |
+| Dashboard delivery = API Gateway → Lambda (NOT CloudFront, NOT Function URL) | frontend-host/ container Lambda fronted by an API Gateway HTTP API (`guardrail-frontend-{env}`) | CloudFront Distribution CREATE is blocked by AWS account verification (403 "account must be verified", needs a Support case — same class as the Bedrock + Lambda-concurrency-quota blockers). Rather than wait on that case, the dashboard is delivered by an **API Gateway HTTP API** with a `$default` catch-all route → the frontend-host container Lambda, which serves the SAME React bundle from the S3 dashboard bucket with in-handler SPA routing. WHY API Gateway over the earlier bare Function URL: it has no account-verification gate, is $0-idle (pay-per-request ~$1/M), terminates HTTPS, supports custom domains/WAF/throttling later, and fits the all-serverless stack; the HTTP API uses payload format 2.0 so the handler's `event["rawPath"]` works unchanged (same field a Function URL provides) — ZERO handler change. ALB was rejected (~$18/mo idle). The CloudFront path (frontend-stack.ts) is RETAINED but GATED OFF (bin/app.ts `cloudfrontEnabled`, default false) as an optional future upgrade — both read the same S3 bundle, so enabling it later needs no rebuild. SSM `/guardrail/{env}/frontend-url` now holds the API Gateway URL. |
+| CloudFront stack gated out of default deploy | `bin/app.ts` instantiates FrontendStack only when `--context cloudfrontEnabled=true` | A bare `cdk deploy --all` (local AND the 02-deploy-infra CI workflow) used to FAIL on GuardrailFrontend every time — both on the CloudFront 403 AND on a duplicate `/guardrail/{env}/cloudfront-url` SSM param (Foundation already owns it; a CFN SSM param can have only one owning stack). Gating the stack out of the default app removes it from synth+deploy, so `--all` is green; the duplicate param was also removed from frontend-stack.ts (Foundation owns it, the 04 workflow overwrites it with the live URL post-deploy). Enable CloudFront the day the account is verified. |
+| Presigned S3 URLs MUST use SigV4 (KMS buckets) | `boto3.client("s3", config=Config(signature_version="s3v4"))` in api/src/routes/{scans,reports}.py | The iac-uploads + scan-reports buckets are SSE-KMS encrypted, and S3 **rejects a SigV2 presigned URL against a KMS bucket** with `HTTP 400 InvalidArgument: Requests specifying Server Side Encryption with AWS KMS managed keys require AWS Signature Version 4`. boto3's default presign was SigV2 (`AWSAccessKeyId=…&Signature=…`), so BOTH the browser upload (presigned PUT — the "push a file to the UI" path) AND the PDF report download (presigned GET) returned 400 in the browser. Pinning the client to `s3v4` fixes both. The report GET also sets `ResponseContentDisposition: attachment; filename="<file>-guardrail-report.pdf"` + `ResponseContentType: application/pdf` so S3 forces a named download (the cross-origin anchor `download` attr is ignored). Verified live: upload PUT→200, report GET→200 application/pdf %PDF-. |
+| PDF download via anchor click, not window.open | frontend ScanDetailPage uses a programmatic `<a>` click | `window.open(url)` ran inside a useEffect (an async continuation, NOT the click's user-gesture stack) → browser popup blockers silently killed it = "download does nothing". An anchor click is treated as a download (not a popup) so it isn't blocked; combined with the S3 `Content-Disposition: attachment` header it downloads a named .pdf without navigating away from the SPA. Also: useScan polling now stops at REPORT_COMPLETE/FAILED (not COMPLETE) so the detail page reaches the state where AI text + the report actually exist. |
 | OAC over a cross-stack bucket: import by name + policy in consumer | NOT the live Foundation bucket construct | Passing `foundation.dashboardBucket` (or its `.bucketName` token) into the frontend/host stack created BOTH a dependency cycle (the L2 OAC auto-adds a bucket policy that lands in Foundation and references the consumer's distribution) AND an `Fn::GetStackOutput` deploy failure. Fix: reconstruct the deterministic name `guardrail-dashboard-${env}-${account}` locally, `s3.Bucket.fromBucketName`, and add the OAC `CfnBucketPolicy` in the consuming stack. Single clean Frontend→Foundation edge, no cycle, no cross-stack output. |
 | `scripts/deploy_env.sh` is the ONLY setup/promotion path | Not bare `cdk deploy --all` | A bare `cdk deploy --all` fails on a fresh env (ECR bootstrap deadlock: Lambda fromEcr needs an image the just-created repo doesn't have). The script sequences deploy(computeEnabled=false) → push 4 images → deploy(computeEnabled=true) → seed rules-catalog. Idempotent, identical across dev/staging/prod, so promotion is reliable by construction. See ENVIRONMENT LIFECYCLE section. |
 | rules-catalog seeding is part of bootstrap | `scripts/seed_rules_catalog.py` runs as step 4 | rules_engine scans the rules-catalog table for enabled rules; a fresh table is empty → custom rules find nothing, only Checkov fires. Proven 2026-06-28: rebuilt-from-empty env scanned 48 findings incl. 9 custom only AFTER seeding. Seeding is non-optional and lives in the bootstrap script. |
