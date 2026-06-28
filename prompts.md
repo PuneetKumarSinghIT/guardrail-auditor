@@ -2429,3 +2429,21 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   - gpt-oss-120b is a reasoning model — needs higher max_completion_tokens (answer in `content`, fallback `reasoning`).
 **Deploy + VERIFY (live AWS):** rebuilt/redeployed ai-analyzer (openai_compat). Fully automatic E2E: upload s3-public-bucket.tf → AI_COMPLETE in ~75s; 13/13 findings explained, CRITICAL/HIGH fixed (cost guard), risk_score=48. Bearer token generated from the Lambda role per call — no secret in code/SM/env/logs.
 **PR:** #13 (updated). **Outcome:** DONE — Phase 6 working E2E. Flip BEDROCK_PROVIDER=anthropic for Claude when the AWS model-access case resolves (no code change).
+
+## 2026-06-28 18:30 — Clarification: Claude 3 vs 4.x option + cost estimation
+**User Prompt:** Could we use Claude 3 Haiku / 3.5 Sonnet instead; what's the code, will it work/can we rely on it, and what's the cost.
+**Action Taken:** Checked access — Claude 3 Haiku + 3 Sonnet exist in us-east-1 (ON_DEMAND) but NOT_AUTHORIZED; Claude 3.5 Sonnet not listed in-region. Explained the switch is config-only (model IDs + IAM in ai-stack.ts; bedrock_client.py unchanged — Claude 3 and 4 share the Anthropic Messages API) and is the most RELIABLE durable path (GA, pure IAM, no preview endpoint) once access lands. Cost estimate: AI usage is the cheapest part — ~$0.003 (gpt-oss) / ~$0.018 (Claude 3 H/S) / ~$0.024 (Claude 4.x) per ~10-finding demo scan; ~$0.40–$3/month at active demo volume; well within the <$20/mo budget.
+**Files Changed:** none (discussion).
+**Scope Impact:** none — confirmed gpt-oss is the working stopgap, Claude 3 H/S (or 4.x) via the anthropic provider is the durable target, flip is one env var.
+
+## 2026-06-28 18:45 — Clarification: Claude access still NOT_AUTHORIZED (quota ≠ access)
+**User Prompt:** Test Claude 3 Haiku/Sonnet to decide; I increased quota to 20000 and can confirm I have Claude access now.
+**Action Taken:** Could NOT test — re-checked all 4 Claude models (3 Haiku, 3 Sonnet, Haiku 4.5, Sonnet 4.6): NOT_AUTHORIZED, invokes fail "Operation not allowed", across 6 regions (us-east-1/2, us-west-2, eu-west-1, eu-central-1, ap-south-1). Clarified quota (rate limit, the 20000 bump) is SEPARATE from model access (the account-level agreement/use-case form). Console "access" not yet reflected on the invoke path → activation/propagation lag. Asked user to confirm console shows literal "Access granted" in us-east-1; will run a real guardrail quality test (Claude 3 H explain + 3 S fix on a real finding) the moment any Claude model invokes.
+**Files Changed:** none (diagnostic).
+**Scope Impact:** none — Claude remains pending account model access; gpt-oss stays the live engine.
+
+## 2026-06-28 19:00 — Phase 6 confirmed live + PROMOTED to dev (PR #13 merged)
+**User Prompt:** Confirm the gpt-oss solution is working; is the phase implemented + promoted to dev; can I start a new chat for the next phase.
+**Action Taken:** Live re-verified the deployed analyzer (Active, openai_compat, gpt-oss-120b) — direct invoke returned {statusCode:200, risk_score:48}, no error. Clarified the phase was deployed to the dev ENVIRONMENT but PR #13 was still OPEN; merged PR #13 (squash, all 4 CI checks green) → Phase 6 now on the dev BRANCH (commit 0c2b50d), branch deleted, local dev synced. Confirmed: safe to start a new chat for Phase 7 (API Layer) — CLAUDE.md SESSION TRACKER already points there.
+**Files Changed:** prompts.md (this log). Merged: ai-engine/, ai-stack.ts, etc. via PR #13.
+**Scope Impact:** Phase 6 COMPLETE + promoted to dev. Next: Phase 7.
