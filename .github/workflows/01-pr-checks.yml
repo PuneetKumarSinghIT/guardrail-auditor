@@ -103,8 +103,8 @@ jobs:
           trivy --version
           # config mode = IaC misconfiguration scan. --exit-code 0 so the INTENTIONAL
           # findings in terraform-examples/bad/ never fail the build (matches the old
-          # tfsec --soft-fail behaviour).
-          trivy config terraform-examples/ --exit-code 0 --no-progress
+          # tfsec --soft-fail behaviour). (--no-progress was removed in recent Trivy.)
+          trivy config terraform-examples/ --exit-code 0
 
   checkov:
     name: IaC Security Scan (Checkov)
