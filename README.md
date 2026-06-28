@@ -317,11 +317,23 @@ using it — there is no NAT gateway, no RDS, no EC2, no idle cluster.
 
 ## Screenshots
 
-_Add dashboard, Scan Detail, and AI-fix screenshots here after a live demo run._
+### Main dashboard — Scan List
+The landing view after login: every uploaded IaC file with its status badge,
+colour-coded risk score, and date. Drag-and-drop a file here to start a scan.
 
-- `docs/screenshots/scan-list.png` — Scan List with risk scores and status
-- `docs/screenshots/scan-detail.png` — Risk meter + findings table
-- `docs/screenshots/ai-drawer.png` — AI explanation + generated fix
+![Main dashboard — Scan List with risk scores and status](screenshots/maindashboard.jpg)
+
+### Scan Detail — Risk Score, findings & report
+The per-scan report: the Risk Score meter, findings-by-severity breakdown, and the
+full findings table (CRITICAL first), with the **Download PDF Report** action.
+
+![Scan Detail — risk meter, findings table and PDF download](screenshots/report_detail.jpg)
+
+### AI explanation & generated fix
+Click any finding to open the AI drawer — a plain-English explanation of the risk
+plus the generated, corrected IaC block for CRITICAL/HIGH findings.
+
+![AI explanation drawer with the generated remediation fix](screenshots/error_reportdetial_fix_detail.jpg)
 
 ---
 
