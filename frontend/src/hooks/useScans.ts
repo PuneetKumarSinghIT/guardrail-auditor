@@ -28,10 +28,16 @@ export function useScan(id: string | undefined) {
     queryKey: ["scan", id],
     queryFn: () => fetchScan(id as string),
     enabled: !!id,
-    // While a scan is still processing, poll the detail view too.
+    // While a scan is still processing, poll the detail view too. The pipeline
+    // runs QUEUED → SCANNING → COMPLETE → AI_COMPLETE → REPORT_COMPLETE, so the
+    // true terminal states are REPORT_COMPLETE (PDF + AI ready) and FAILED — stop
+    // there. Stopping at COMPLETE (a midpoint) would freeze the page before AI
+    // explanations and the downloadable report exist.
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status && ["COMPLETE", "FAILED"].includes(status) ? false : 15_000;
+      return status && ["REPORT_COMPLETE", "FAILED"].includes(status)
+        ? false
+        : 15_000;
     },
   });
 }

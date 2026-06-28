@@ -67,8 +67,8 @@ event-driven serverless system on AWS.
                        └────────────────────┘                                  ▼
                                                                     ┌────────────────────┐
    React dashboard ◀── API Gateway ── api Lambda ── DynamoDB        │ email (Lambda) SES │
-   (S3 + CloudFront /   (Cognito JWT)                               │  PDF + summary     │
-    Lambda Function URL)                                            └────────────────────┘
+   served by          (REST, Cognito JWT)                           │  PDF + summary     │
+   API Gateway → Lambda → S3 bundle                                 └────────────────────┘
 
    Cross-cutting: CloudWatch dashboard + alarms, X-Ray tracing on every Lambda,
                   failure-handler (Lambda) on any ECS exit≠0 / DLQ → failure email.
@@ -76,6 +76,23 @@ event-driven serverless system on AWS.
 
 **Flow:** upload → ingest → two-layer scan → aggregate → AI analysis → PDF report → email.
 Every hop is an EventBridge event; every compute unit is a container image from ECR.
+
+**Infrastructure notes (and why):**
+- **Dashboard delivery = API Gateway → Lambda → S3 bundle, not CloudFront.** CloudFront
+  Distribution creation is blocked on a fresh/unverified AWS account (`403 "account must
+  be verified"`). Rather than block the whole product on a Support case, the dashboard is
+  served by an **API Gateway HTTP API** whose `$default` route proxies to a small Lambda
+  that streams the React bundle from the private S3 bucket. It needs no account
+  verification, is `$0` idle (pay-per-request), terminates HTTPS, and reuses payload
+  format 2.0 so the handler is identical to the earlier Function-URL host. The CloudFront
+  path is kept in code but **gated off** (`--context cloudfrontEnabled=true`) as an optional
+  upgrade once the account is verified — both read the same S3 bundle, so switching needs
+  no rebuild.
+- **All presigned URLs use AWS Signature V4.** Uploads and report downloads go through
+  presigned S3 URLs against **KMS-encrypted** buckets, and S3 **rejects SigV2 against a
+  KMS bucket** (`HTTP 400 … require AWS Signature Version 4`). The API's boto3 S3 client is
+  pinned to `signature_version="s3v4"` so both the browser **upload** (presigned PUT) and
+  the **PDF download** (presigned GET, with `Content-Disposition: attachment`) work.
 
 ---
 
@@ -91,6 +108,7 @@ Every hop is an EventBridge event; every compute unit is a container image from 
 | Scanners | Custom Python rules engine + Checkov (OSS) |
 | API | API Gateway REST + Cognito (JWT auth) |
 | Frontend | React 18 + TypeScript + Vite + Tailwind, React Query, Amplify |
+| Dashboard delivery | API Gateway (HTTP API) → Lambda → S3 bundle (CloudFront-free, see note) |
 | Notifications | Amazon SES (PDF report email) |
 | Observability | CloudWatch dashboard + alarms, AWS X-Ray |
 | CI/CD | GitHub Actions (OIDC — no stored AWS keys) |
@@ -120,6 +138,154 @@ back down to a $0, empty account with one command:
 ```bash
 AWS_PROFILE=<your-profile> npx cdk destroy --all --context env=dev --force
 ```
+
+---
+
+## Manual setup — one-time, in the AWS Console
+
+CDK provisions every resource, but a few things **can only be enabled by a human
+in the AWS Console** (AWS gates them behind account verification or a one-time
+opt-in form). Do these once per account before the product is fully usable.
+
+### 1. AWS account activation / verification (new accounts)
+A brand-new or unverified AWS account ships with **reduced service limits** that
+will block parts of this project until AWS verifies the account (this can take a
+few hours to a couple of days after you add a payment method and use the account):
+
+| Symptom you'll see | Root cause | What to do |
+|---|---|---|
+| CloudFront create → `403 "account must be verified"` | CloudFront gated on new accounts | Open a **Support case** (Account & Billing) asking to enable CloudFront; until then the dashboard runs on **API Gateway → Lambda** (already the default — no action needed). |
+| Bedrock `InvokeModel` → `AccessDenied` / model not enabled | Model access not granted | Enable model access (step 3). |
+| Lambda reserved concurrency deploy fails: `…below its minimum value of [10]` | Account Lambda concurrency quota = 10 | Request a **Lambda concurrency quota increase** (Service Quotas → Lambda → "Concurrent executions"). Until then leave `reservedConcurrency` off (the default). |
+
+> You do **not** need CloudFront or a quota increase to run and demo the product —
+> the defaults work on an unverified account. These only unlock optional hardening.
+
+### 2. Create a Cognito login user
+Self-signup is disabled, so create your demo user with the CLI (replace the pool id
+from `aws ssm get-parameter --name /guardrail/dev/cognito-user-pool-id`):
+
+```bash
+POOL=$(aws ssm get-parameter --name /guardrail/dev/cognito-user-pool-id --query Parameter.Value --output text)
+
+aws cognito-idp admin-create-user \
+  --user-pool-id "$POOL" \
+  --username you@example.com \
+  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
+  --message-action SUPPRESS
+
+# Set a permanent password (so there's no force-change-password prompt):
+aws cognito-idp admin-set-user-password \
+  --user-pool-id "$POOL" \
+  --username you@example.com \
+  --password 'YourStrongP4ss!' \
+  --permanent
+```
+
+You now log in to the dashboard with `you@example.com` / `YourStrongP4ss!`.
+
+### 3. Enable Bedrock model access (for AI explanations + fixes)
+In the Console → **Bedrock → Model access → Manage model access**, enable:
+- **Anthropic Claude Haiku 4.5** (used for risk explanations)
+- **Anthropic Claude Sonnet 4.6** (used to generate the corrected IaC)
+
+Anthropic models require accepting a short use-case form **in the Console** (this
+step is not available via CLI). Once granted, set `BEDROCK_PROVIDER=anthropic` in
+`infrastructure/lib/ai-stack.ts` and redeploy `GuardrailAi-{env}`. Until then the
+analyzer uses a runtime-token bridge so the pipeline still produces AI output.
+
+### 4. Verify SES email identities (sandbox)
+The completion email is sent via **Amazon SES**, which starts in *sandbox* mode —
+it can only send **to and from verified addresses**. Verify the address(es) you'll
+use:
+
+```bash
+aws ses verify-email-identity --email-address you@example.com
+# Click the confirmation link AWS emails you. Repeat for any other To/From address.
+```
+
+To send to arbitrary recipients (outside sandbox), request **SES production access**
+in the Console (SES → Account dashboard → Request production access).
+
+---
+
+## Configure the email (To / From) facility
+
+The PDF-report email is fully configurable. The From and To addresses live in
+**one place** — a Secrets Manager secret seeded by CDK — so you can point the email
+facility at whatever addresses a client needs.
+
+**Where it's defined (in code):** `infrastructure/lib/foundation-stack.ts`
+
+```ts
+this.appSecret = new secretsmanager.Secret(this, 'AppSecrets', {
+  secretName: `guardrail/${env}/app-secrets`,
+  secretObjectValue: {
+    ses_from_email: cdk.SecretValue.unsafePlainText('you@example.com'), // FROM
+    ses_to_email:   cdk.SecretValue.unsafePlainText('client@example.com'), // TO
+  },
+});
+```
+
+**To change them**, either edit those two lines and redeploy `GuardrailFoundation-{env}`,
+or update the live secret without a redeploy:
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id guardrail/dev/app-secrets \
+  --secret-string '{"ses_from_email":"you@example.com","ses_to_email":"client@example.com"}'
+```
+
+Rules: **both addresses must be SES-verified** while in sandbox (step 4 above); the
+From address must be a verified identity. The `email-handler` Lambda reads this
+secret at runtime — no code change needed, just the secret value.
+
+---
+
+## Testing the product — push a file from a folder to the UI (live, no scripts)
+
+This is the **live client-demo flow**: log in, drag a real IaC file onto the
+dashboard, and watch the scan run end-to-end. No script required.
+
+**1. Open the dashboard.** Get the live URL and log in with your Cognito user:
+
+```bash
+aws ssm get-parameter --name /guardrail/dev/frontend-url --query Parameter.Value --output text
+# e.g. https://<id>.execute-api.us-east-1.amazonaws.com   (API Gateway → Lambda host)
+```
+
+**2. Drag-and-drop a sample file** from one of these folders straight onto the
+Scan List page (the uploader accepts `.tf .hcl .yaml .yml .json .template`):
+
+| Folder | Files | What it demonstrates |
+|---|---|---|
+| `terraform-examples/bad/` | `demo-master-bad.tf` | **Best demo file** — triggers S3-001, SG-001, IAM-001, ENC-001, LOG-001 (all CRITICAL paths) |
+| `terraform-examples/bad/` | `s3-public-bucket.tf`, `sg-open-ssh.tf`, `iam-wildcard.tf`, `unencrypted-resources.tf` | Focused single-category violations |
+| `terraform-examples/good/` | `s3-secure.tf`, `sg-restricted.tf`, `iam-least-privilege.tf` | Clean files → low/zero risk score |
+| `cloudformation/bad/` | `demo-master-bad.yaml`, `public-s3-cfn.yaml`, `open-sg-cfn.yaml` | The same demo for CloudFormation |
+| `cloudformation/good/` | `secure-s3-cfn.yaml`, `secure-sg-cfn.yaml` | Compliant CloudFormation |
+
+**3. Watch it process.** The Scan List auto-refreshes every 30s; the status moves
+`QUEUED → SCANNING → COMPLETE → AI Analysis → Complete` on its own (no reload). It
+takes ~60–90s.
+
+**4. Open the scan.** Click the row → the Scan Detail page shows the **Risk Score
+meter** (colour-coded), the **findings table** (CRITICAL first), and a click on any
+finding opens the **AI explanation drawer** with the generated fix for CRITICAL/HIGH.
+
+**5. Download the PDF.** Click **Download PDF Report** → the full report (all
+severities + compliant resources) downloads as
+`<file>-guardrail-report.pdf`.
+
+**6. Check your inbox.** A completion email arrives (To address from the secret
+above) with a CRITICAL/HIGH summary and the PDF attached.
+
+> Prefer the command line? You can do the same upload headlessly:
+> ```bash
+> BUCKET=$(aws ssm get-parameter --name /guardrail/dev/bucket-iac-uploads --query Parameter.Value --output text)
+> aws s3 cp terraform-examples/bad/demo-master-bad.tf "s3://$BUCKET/uploads/$(uuidgen)/demo-master-bad.tf"
+> # the S3 ObjectCreated event drives the same pipeline.
+> ```
 
 ---
 

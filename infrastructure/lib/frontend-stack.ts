@@ -119,11 +119,13 @@ export class FrontendStack extends cdk.Stack {
     });
     distIdParam.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
-    const cfUrlParam = new ssm.StringParameter(this, "CloudFrontUrlParam", {
-      parameterName: `/guardrail/${env}/cloudfront-url`,
-      stringValue: cfUrl,
-    });
-    cfUrlParam.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+    // NOTE: /guardrail/{env}/cloudfront-url is owned by FoundationStack (it seeds a
+    // placeholder the email-handler reads at deploy time, before CloudFront exists).
+    // A CloudFormation SSM parameter can only be owned by ONE stack, so this stack
+    // must NOT also create it (doing so failed change-set validation with
+    // "Resource ... already exists"). The real distribution domain is exposed via the
+    // CfnOutput below; 04-deploy-frontend.yml overwrites the Foundation param with the
+    // live URL post-deploy (`aws ssm put-parameter --overwrite`).
 
     new cdk.CfnOutput(this, "DistributionId", {
       value: this.distribution.distributionId,

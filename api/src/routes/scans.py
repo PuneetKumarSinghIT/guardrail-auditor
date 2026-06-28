@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 
 SCAN_JOBS_TABLE = os.environ["SCAN_JOBS_TABLE"]
 FINDINGS_TABLE = os.environ["FINDINGS_TABLE"]
@@ -20,7 +21,11 @@ ALLOWED_EXTENSIONS = (".tf", ".hcl", ".yaml", ".yml", ".json", ".template")
 
 # Module-level clients — created once per cold start, intercepted by moto in tests.
 dynamodb = boto3.resource("dynamodb")
-s3_client = boto3.client("s3")
+# SigV4 REQUIRED: the iac-uploads bucket is SSE-KMS encrypted, and S3 rejects a
+# SigV2 presigned PUT against a KMS bucket (HTTP 400 "require AWS Signature Version
+# 4"). Without this, browser uploads from the dashboard ("push a file to the UI")
+# fail at the presigned PUT step. Force s3v4.
+s3_client = boto3.client("s3", config=Config(signature_version="s3v4"))
 
 
 def _iac_type(file_name: str) -> str:

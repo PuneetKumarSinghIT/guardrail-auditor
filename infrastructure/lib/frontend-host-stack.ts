@@ -1,4 +1,6 @@
 import * as cdk from "aws-cdk-lib";
+import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -13,17 +15,24 @@ interface FrontendHostStackProps extends cdk.StackProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FRONTEND HOST STACK  (stopgap delivery while CloudFront is account-blocked)
-//   guardrail-frontend-host-{env}  ← Lambda: serves the SPA bundle from the
-//                                    dashboard S3 bucket behind a public
-//                                    Function URL (HTTPS, $0 idle).
+// FRONTEND HOST STACK  (dashboard delivery — API Gateway → Lambda → S3 bundle)
+//   guardrail-frontend-{env}       ← API Gateway HTTP API (HTTPS, public)
+//   guardrail-frontend-host-{env}  ← Lambda: serves the React SPA bundle from the
+//                                    dashboard S3 bucket; SPA routing in-handler.
+//
+// WHY API GATEWAY (not CloudFront): CloudFront Distribution CREATE is blocked on
+// this account (403 "account must be verified" — same class as the Bedrock/Lambda-
+// quota blockers) and needs an AWS Support case. API Gateway has NO such gate, is
+// $0-idle (pay-per-request, ~$1/million), terminates HTTPS, and fits the existing
+// all-serverless stack — so it is the chosen dashboard delivery. The HTTP API uses
+// payload format 2.0, so the host handler's event["rawPath"] works unchanged (the
+// same field a Lambda Function URL provides). The CloudFront path (frontend-stack.ts)
+// is retained but GATED OFF (bin/app.ts cloudfrontEnabled) as an optional future
+// upgrade; both read the SAME dist/ the 04-deploy-frontend.yml workflow syncs, so
+// switching needs no rebuild. See CLAUDE.md "KNOWN DECISIONS".
 //
 // Same ECR bootstrap deadlock + computeEnabled two-phase gate as scanner/ai/api.
-// Reads the SAME dist/ the 04-deploy-frontend.yml workflow syncs to the
-// dashboard bucket, so when CloudFront is unblocked nothing has to be rebuilt —
-// just deploy GuardrailFrontend-{env} and switch the dashboard URL.
-//
-// SSM after deploy:  /guardrail/{env}/frontend-url  → public Function URL
+// SSM after deploy:  /guardrail/{env}/frontend-url  → public API Gateway URL
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class FrontendHostStack extends cdk.Stack {
@@ -115,24 +124,28 @@ export class FrontendHostStack extends cdk.Stack {
         }),
       });
 
-      // Public Function URL — the dashboard is a login page; auth is enforced
-      // client-side (Cognito) and by the API (JWT). NONE auth lets the browser
-      // load the static shell directly.
-      const fnUrl = this.hostFn.addFunctionUrl({
-        authType: lambda.FunctionUrlAuthType.NONE,
-        cors: {
-          allowedOrigins: ["*"],
-          allowedMethods: [lambda.HttpMethod.GET],
-        },
+      // ── API Gateway HTTP API → Lambda (public dashboard delivery) ──────────
+      // A catch-all $default route proxies EVERY path to the host Lambda, which
+      // serves index.html (SPA shell) or the requested asset from S3. No
+      // authorizer — the dashboard is a login page; auth is enforced client-side
+      // (Cognito) and by the REST API (JWT). HttpLambdaIntegration defaults to
+      // payload format 2.0, so the handler's event["rawPath"] resolves the path.
+      const httpApi = new apigwv2.HttpApi(this, "FrontendHttpApi", {
+        apiName: `guardrail-frontend-${env}`,
+        description: `Guardrail Auditor dashboard host (${env}) — API Gateway → Lambda`,
+        defaultIntegration: new HttpLambdaIntegration(
+          "FrontendHostIntegration",
+          this.hostFn
+        ),
       });
 
       const urlParam = new ssm.StringParameter(this, "FrontendUrlParam", {
         parameterName: `/guardrail/${env}/frontend-url`,
-        stringValue: fnUrl.url,
+        stringValue: httpApi.apiEndpoint,
       });
       urlParam.applyRemovalPolicy(removalPolicy);
 
-      new cdk.CfnOutput(this, "FrontendUrl", { value: fnUrl.url });
+      new cdk.CfnOutput(this, "FrontendUrl", { value: httpApi.apiEndpoint });
     }
   }
 }

@@ -8,6 +8,7 @@ export type ScanStatus =
   | "AI_ANALYSIS"
   | "AI_COMPLETE"
   | "COMPLETE"
+  | "REPORT_COMPLETE"
   | "FAILED";
 
 export interface FindingCounts {
