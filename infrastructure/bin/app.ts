@@ -8,6 +8,7 @@ import { AiStack } from '../lib/ai-stack';
 import { ApiStack } from '../lib/api-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { FrontendHostStack } from '../lib/frontend-host-stack';
+import { MonitoringStack } from '../lib/monitoring-stack';
 
 const app = new cdk.App();
 
@@ -36,8 +37,10 @@ const scanner = new ScannerStack(app, `GuardrailScanner-${env}`, {
   findingsTable: foundation.findingsTable,
   rulesCatalogTable: foundation.rulesCatalogTable,
   uploadBucket: foundation.uploadsBucket,
+  reportsBucket: foundation.reportsBucket,
   kmsKey: foundation.encryptionKey,
   eventBus: foundation.eventBus,
+  appSecret: foundation.appSecret,
 });
 scanner.addDependency(foundation);
 
@@ -88,3 +91,12 @@ const frontendHost = new FrontendHostStack(app, `GuardrailFrontendHost-${env}`, 
   kmsKey: foundation.encryptionKey,
 });
 frontendHost.addDependency(foundation);
+
+// Observability — references pipeline Lambdas by metric dimension (no construct
+// import), so it only needs Foundation for the KMS key on its SNS topic.
+const monitoring = new MonitoringStack(app, `GuardrailMonitor-${env}`, {
+  env: awsEnv,
+  description: `Guardrail Auditor - CloudWatch dashboard + alarms (${env})`,
+  kmsKey: foundation.encryptionKey,
+});
+monitoring.addDependency(foundation);

@@ -10,6 +10,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
 // Helper: create an SSM parameter and immediately apply DESTROY removal policy.
 // ssm.StringParameter does not accept removalPolicy in its constructor props.
@@ -33,6 +34,7 @@ export class FoundationStack extends cdk.Stack {
   public readonly lambdaBaseRole: iam.Role;
   public readonly fargateTaskRole: iam.Role;
   public readonly eventBus: events.EventBus;
+  public readonly appSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -219,6 +221,28 @@ export class FoundationStack extends cdk.Stack {
     this.eventBus.applyRemovalPolicy(removalPolicy);
     ssmParam(this, 'EventBusNameParam', `/guardrail/${env}/event-bus-name`, this.eventBus.eventBusName);
     ssmParam(this, 'EventBusArnParam',  `/guardrail/${env}/event-bus-arn`,  this.eventBus.eventBusArn);
+
+    // ── Secrets Manager: app secrets (PII only — SES From/To addresses) ──
+    // One JSON secret per env (CLAUDE.md secrets policy). Only the email-handler
+    // reads it. Demo addresses are non-sensitive, so unsafePlainText (which lands
+    // the value in the synthesized template) is acceptable here and keeps the
+    // bootstrap one-command — no manual post-deploy secret population needed.
+    this.appSecret = new secretsmanager.Secret(this, 'AppSecrets', {
+      secretName: `guardrail/${env}/app-secrets`,
+      encryptionKey: this.encryptionKey,
+      removalPolicy,
+      secretObjectValue: {
+        ses_from_email: cdk.SecretValue.unsafePlainText('puneetkumarsingh765@gmail.com'),
+        ses_to_email: cdk.SecretValue.unsafePlainText('puneetkumarsingh765@gmail.com'),
+      },
+    });
+    ssmParam(this, 'AppSecretArnParam', `/guardrail/${env}/app-secret-arn`, this.appSecret.secretArn);
+
+    // ── CloudFront URL (non-sensitive) — used by email-handler for the report link.
+    // CloudFront is account-verification-blocked; until it deploys the live dashboard
+    // is the frontend-host Lambda Function URL (SSM /guardrail/{env}/frontend-url).
+    // Overwrite this value once CloudFront is live — the email just reads it.
+    ssmParam(this, 'CloudFrontUrlParam', `/guardrail/${env}/cloudfront-url`, `https://dashboard-${env}.guardrail.invalid`);
 
     // ── IAM Roles ────────────────────────────────────────────────────
     this.lambdaBaseRole = new iam.Role(this, 'LambdaBaseRole', {
