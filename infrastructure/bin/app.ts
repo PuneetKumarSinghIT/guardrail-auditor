@@ -7,6 +7,7 @@ import { ScannerStack } from '../lib/scanner-stack';
 import { AiStack } from '../lib/ai-stack';
 import { ApiStack } from '../lib/api-stack';
 import { FrontendStack } from '../lib/frontend-stack';
+import { FrontendHostStack } from '../lib/frontend-host-stack';
 
 const app = new cdk.App();
 
@@ -78,3 +79,12 @@ const frontend = new FrontendStack(app, `GuardrailFrontend-${env}`, {
 // token), so this explicit dependency is the ONLY Frontend→Foundation edge — it
 // just guarantees the bucket exists before CloudFront fronts it. No cycle.
 frontend.addDependency(foundation);
+
+// Stopgap delivery while CloudFront is blocked by AWS account verification:
+// a $0-idle Lambda Function URL that serves the same dashboard bundle from S3.
+const frontendHost = new FrontendHostStack(app, `GuardrailFrontendHost-${env}`, {
+  env: awsEnv,
+  description: `Guardrail Auditor - Lambda Function URL SPA host (${env})`,
+  kmsKey: foundation.encryptionKey,
+});
+frontendHost.addDependency(foundation);
