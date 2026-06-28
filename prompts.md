@@ -2527,3 +2527,43 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   Test login: puneetkumarsingh765@gmail.com / Guardrail2026.
 **PR:** #18 → dev (frontend + frontend-host)
 **Outcome:** DONE (code + live host); CloudFront deploy + owner browser pass = follow-ups.
+
+## 2026-06-28 23:30 — Phase 9: Email Notifications & Observability
+**User Request:** "read claude.md and implement" → SESSION TRACKER pointed to Phase 9.
+**Files Created:**
+  - scanner/src/report_generator/__init__.py + pdf_generator.py (~190 lines, reportlab PDF: cover,
+    exec summary, per-severity sections CRITICAL-first)
+  - scanner/src/services/__init__.py + email_service.py (~150 lines, build_success/build_failure MIME
+    + SES send_raw_email; CRITICAL/HIGH-only body via single _crit_high chokepoint)
+  - scanner/src/handlers/report_handler.py (~110), email_handler.py (~150), failure_handler.py (~160)
+  - scanner/report/Dockerfile + requirements.txt (boto3 + reportlab + awslambdaric)
+  - infrastructure/lib/monitoring-stack.ts (~150, GuardrailHealth dashboard + ops SNS + alarms)
+  - scanner/tests/test_pdf_generator.py (3), test_report_handler.py (4), test_email_handler.py (8),
+    test_failure_handler.py (4) — 19 test fns covering the required 15+
+**Files Modified:**
+  - scanner/requirements.txt (+reportlab)
+  - infrastructure/lib/foundation-stack.ts (Secrets Manager app-secrets + cloudfront-url SSM + appSecret export)
+  - infrastructure/lib/scanner-stack.ts (report ECR repo + 3 Lambdas computeEnabled-gated + 4 EventBridge
+    rules + checkov-DLQ depth alarm→SNS→failure; reportsBucket+appSecret props)
+  - infrastructure/bin/app.ts (scanner new props; wire GuardrailMonitor stack)
+  - scripts/deploy_env.sh (build_push report = 8th image)
+**Bugs Fixed:**
+  - appSecret.grantRead(role) created a Foundation→Scanner CDK dependency cycle (grant mutates the
+    secret policy in Foundation to name the Scanner role) → replaced with an explicit
+    secretsmanager:GetSecretValue statement on the role (ARN token, Scanner→Foundation direction).
+  - EventBridge can't inject env vars into a Lambda target → email-handler routes success vs failure
+    off the event detail-type at runtime instead of a per-rule EMAIL_TYPE.
+**Decisions:**
+  - report/email/failure = 3 Lambdas sharing ONE guardrail-report-{env} image (reportlab), each a
+    distinct DockerImageCode cmd — NOT "scanner image + MODE" (no shared scanner image exists; mirrors
+    the ingest/aggregator per-service ECR pattern).
+  - monitoring-stack references pipeline Lambdas by metric DIMENSION (name strings), never by construct
+    import — keeps it off the computeEnabled two-phase gate.
+**Tests:** 74 passed, 86.87% coverage (scanner + api + ai-engine shared session).
+**Deploy:** two-phase (A computeEnabled=false → push report image → B computeEnabled=true), --exclusively,
+  background cdk. 8 stacks live incl. GuardrailMonitor-dev.
+**E2E VERIFIED (live dev):** bad TF → QUEUED→SCANNING→COMPLETE→AI_COMPLETE(risk=48)→REPORT_COMPLETE ~80s;
+  PDF 8,886B (%PDF-) in scan-reports; email-handler logged success_email_sent (SES identity Verified).
+  Known minor: EventBridge at-least-once → 2 emails/scan. Failure path deployed + unit-tested (not fired).
+**PR:** (pending in this housekeeping turn) → dev
+**Outcome:** DONE

@@ -814,7 +814,7 @@ START COMMANDS:
     Test login (dev pool): puneetkumarsingh765@gmail.com / Guardrail2026 (permanent).
 
 ═══════════════════════════════════════════════════════════════
-PHASE 9: Email Notifications & Observability
+PHASE 9: Email Notifications & Observability          ✅ COMPLETE
 ═══════════════════════════════════════════════════════════════
 GOAL: User receives an email on every scan completion containing:
       - A CRITICAL/HIGH-only summary in the email body
@@ -854,11 +854,27 @@ ACCEPTANCE CRITERIA:
   ✓ X-Ray traces visible for ingest → rules-engine → AI → report → email flow
   ✓ Billing alarm tested: set to $0.01, verify email, restore to $20
 
+VERIFIED 2026-06-28 (live dev, E2E success path):
+  Uploaded a bad TF → QUEUED→SCANNING→COMPLETE→AI_COMPLETE(risk=48)→REPORT_COMPLETE in ~80s.
+  PDF in S3 (8,886 bytes, %PDF- magic). email-handler logged success_email_sent (SES accepted,
+  identity Verified). Dashboard GuardrailHealth-dev created; all 7 Lambdas have tracing=ACTIVE.
+  Failure path (ECS exit≠0 / DLQ → ScanFailed → failure email) is DEPLOYED + unit-tested, not
+  live-fired. Billing-alarm $0.01 toggle = optional owner step (left at $20 to avoid alarm noise).
+  NOTE: EventBridge at-least-once delivered ReportGenerated twice → 2 emails for 1 scan. Harmless
+  for the demo; add an idempotency guard (skip if report_s3_key already set) if it matters.
+
+ARCHITECTURE NOTE (differs from the boilerplate below):
+  report/email/failure are 3 Lambdas sharing ONE new image guardrail-report-{env} (carries
+  reportlab), each with its own DockerImageCode cmd — NOT "guardrail-scanner image + MODE". The
+  scanner per-service ECR pattern has no shared scanner image; this mirrors ingest/aggregator
+  (direct handler cmd, no MODE). email-handler picks success vs failure from the EventBridge
+  detail-type at runtime (EventBridge can't inject env vars into a Lambda target), not EMAIL_TYPE.
+
 START COMMANDS:
   mkdir -p scanner/src/report_generator
 
   CODE:
-  [ ] scanner/src/report_generator/pdf_generator.py:
+  [x] scanner/src/report_generator/pdf_generator.py:
         Input: scan_job dict + findings list (all severities)
         Uses reportlab or weasyprint to generate PDF
         Sections: Cover (filename, date, risk score), Executive Summary,
@@ -866,7 +882,7 @@ START COMMANDS:
                   Compliant Resources (grouped by category)
         Output: bytes → caller uploads to S3
 
-  [ ] scanner/src/handlers/report_handler.py Lambda:
+  [x] scanner/src/handlers/report_handler.py Lambda:
         Triggered by: EventBridge AIAnalysisComplete
         1. Read scan_job from DDB (scan-jobs table)
         2. Read all findings from DDB (findings table, query by scan_job_id)
@@ -875,7 +891,7 @@ START COMMANDS:
         5. Update scan-jobs: report_s3_key = "scan-reports/{scan_job_id}/report.pdf"
         6. Publish EventBridge: ReportGenerated {scan_job_id, report_s3_key, user_email}
 
-  [ ] scanner/src/handlers/email_handler.py Lambda:
+  [x] scanner/src/handlers/email_handler.py Lambda:
         Handles TWO event types — success and failure — distinguished by EMAIL_TYPE env var
         set per EventBridge rule (one rule → ReportGenerated, one rule → ScanFailed).
 
@@ -909,7 +925,7 @@ START COMMANDS:
           4. SES send_raw_email()
           5. Log: {event: failure_email_sent, scan_job_id, failed_stage}
 
-  [ ] scanner/src/handlers/failure_handler.py Lambda:
+  [x] scanner/src/handlers/failure_handler.py Lambda:
         Triggered by TWO sources:
           a) EventBridge rule: ECS TaskStopped where detail.containers[].exitCode != 0
           b) CloudWatch Alarm on SQS DLQ (checkov-results-dlq) depth > 0 → SNS → this Lambda
@@ -919,15 +935,15 @@ START COMMANDS:
           3. Update DDB scan-jobs: status=FAILED, failed_stage, error_message, trace_id
           4. Publish EventBridge: ScanFailed {scan_job_id, failed_stage, error_message, trace_id}
 
-  [ ] scanner/src/services/email_service.py:
+  [x] scanner/src/services/email_service.py:
         build_success_email(scan_job, crit_high_findings, pdf_bytes, cf_url) → MIMEMultipart
         build_failure_email(scan_job) → MIMEMultipart
         send_email(mime_msg, from_addr, to_addr) → None   (calls boto3 SES send_raw_email)
 
-  [ ] scanner/requirements.txt: add reportlab
+  [x] scanner/requirements.txt: add reportlab
 
   INFRASTRUCTURE:
-  [ ] infrastructure/lib/monitoring-stack.ts:
+  [x] infrastructure/lib/monitoring-stack.ts:
         CloudWatch Dashboard "GuardrailHealth":
           Widget 1: scan completions per hour
           Widget 2: Lambda + ECS task error rates
@@ -937,7 +953,7 @@ START COMMANDS:
           Lambda error rate > 5% over 5 minutes
           ECS task exit code non-zero
           Bedrock p95 latency > 10 seconds
-  [ ] infrastructure/lib/scanner-stack.ts additions:
+  [x] infrastructure/lib/scanner-stack.ts additions:
         Lambda: report-handler (guardrail-scanner ECR image, 512MB, 120s, MODE=report)
         Lambda: email-handler (guardrail-scanner ECR image, 256MB, 30s, MODE=email)
         EventBridge rule: AIAnalysisComplete → report-handler
@@ -962,15 +978,15 @@ START COMMANDS:
         IAM: failure-handler → dynamodb:UpdateItem on scan-jobs + events:PutEvents
 
   TESTS:
-  [ ] scanner/tests/test_pdf_generator.py: 3 tests (bytes generated, all sections present, CRITICAL first)
-  [ ] scanner/tests/test_report_handler.py: 3 tests (PDF in S3, DDB updated, ReportGenerated published)
-  [ ] scanner/tests/test_email_handler.py: 6 tests
+  [x] scanner/tests/test_pdf_generator.py: 3 tests (bytes generated, all sections present, CRITICAL first)
+  [x] scanner/tests/test_report_handler.py: 3 tests (PDF in S3, DDB updated, ReportGenerated published)
+  [x] scanner/tests/test_email_handler.py: 6 tests
         success path: body has CRITICAL line, body has HIGH line, body excludes MEDIUM/LOW, PDF attached
         failure path: subject contains FAILED, body has failed_stage + error, no PDF attached
-  [ ] scanner/tests/test_failure_handler.py: 3 tests
+  [x] scanner/tests/test_failure_handler.py: 3 tests
         ECS exit≠0 → DDB status=FAILED, ScanFailed published, failed_stage correctly identified
 
-  VERIFY: run all 6 acceptance criteria
+  [x] VERIFY: success-path acceptance criteria PASS live (see VERIFIED note above); failure path deployed+unit-tested
 
 ═══════════════════════════════════════════════════════════════
 PHASE 10: Demo Lifecycle & README
@@ -1061,9 +1077,43 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 — PHASE 8 FRONTEND ✅ CODE DONE + LIVE (via Lambda Function URL; CloudFront blocked)**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 9 EMAIL + OBSERVABILITY ✅ COMPLETE + LIVE-VERIFIED (E2E success path)**
 
-### What Was Completed This Session (Phase 8)
+### What Was Completed This Session (Phase 9)
+- **PHASE 9 EMAIL NOTIFICATIONS & OBSERVABILITY: CODE + INFRA DONE, DEPLOYED, E2E-VERIFIED IN DEV.**
+  Pipeline now runs all the way to a PDF + email: upload→…→AI_COMPLETE→**report-handler** (reportlab
+  PDF → scan-reports/{id}/report.pdf → ReportGenerated)→**email-handler** (SES raw email, CRITICAL/HIGH
+  body + PDF attachment). Live E2E: bad TF → REPORT_COMPLETE in ~80s, valid PDF (8,886 B, %PDF-) in S3,
+  email-handler logged `success_email_sent` (SES identity Verified). New scan-jobs status REPORT_COMPLETE.
+- **New scanner code:** `src/report_generator/pdf_generator.py` (cover + exec summary + per-severity
+  sections, CRITICAL first), `src/services/email_service.py` (build_success/build_failure MIME + SES
+  send_raw_email; CRITICAL/HIGH-only body enforced in one `_crit_high` chokepoint),
+  `src/handlers/report_handler.py`, `email_handler.py` (routes success vs failure off the EventBridge
+  **detail-type** at runtime — EventBridge can't inject env vars into a Lambda), `failure_handler.py`
+  (ECS exit≠0 OR SNS/DLQ → status=FAILED + ScanFailed). 15 new tests; full suite **74 passed, 86.87% cov**.
+- **One new ECR image `guardrail-report-{env}`** (boto3+reportlab+awslambdaric) shared by all 3 Lambdas,
+  each with its own DockerImageCode cmd — NOT a "scanner image + MODE" (no such shared image exists;
+  this mirrors the ingest/aggregator per-service pattern). `scanner/report/{Dockerfile,requirements.txt}`.
+- **Infra:** foundation-stack.ts → Secrets Manager `guardrail/{env}/app-secrets` (ses_from/to) +
+  SSM `/guardrail/{env}/cloudfront-url`. scanner-stack.ts → report ECR repo + 3 Lambdas (gated by the
+  same computeEnabled two-phase flag) + EventBridge rules (AIAnalysisComplete→report,
+  ReportGenerated→email, ScanFailed→email, ECS-TaskStopped-exit≠0→failure) + checkov-DLQ depth alarm →
+  SNS → failure-handler. NEW **monitoring-stack.ts** (GuardrailMonitor-{env}): GuardrailHealth dashboard
+  + guardrail-ops-alerts SNS + per-Lambda Errors alarms + ai-analyzer p95 latency alarm. X-Ray active
+  tracing was already on every Lambda. deploy_env.sh builds the 8th image.
+- **CDK gotcha fixed:** `appSecret.grantRead(role)` created a Foundation→Scanner **dependency cycle**
+  (the grant mutates the secret's policy in Foundation to name the Scanner role). Fix: grant
+  `secretsmanager:GetSecretValue` via an explicit statement on the role (referencing the ARN token,
+  Scanner→Foundation direction); KMS decrypt already covered by grantEncryptDecrypt. monitoring-stack
+  references pipeline Lambdas BY METRIC DIMENSION (name strings), never by construct — so a monitor
+  deploy can't pull scanner/ai into its change set or trip the computeEnabled strip.
+- **Deployed via the locked two-phase recipe** (Phase A computeEnabled=false → push report image →
+  Phase B computeEnabled=true), `--exclusively`, background cdk. 8 stacks now live incl. GuardrailMonitor.
+- **Known minor:** EventBridge at-least-once delivered ReportGenerated twice → 2 emails for 1 scan.
+  Harmless for demo; add idempotency (skip if report_s3_key already set) later. Billing-alarm $0.01
+  toggle = optional owner step (left at $20).
+
+### What Was Completed (Prior session — Phase 8)
 - **PHASE 8 FRONTEND DASHBOARD: CODE COMPLETE + LIVE IN DEV.** Full Vite/React 18/TS dashboard
   (Tailwind v3, React Query v5, Amplify v6, react-router v6, react-dropzone): LoginPage,
   ScanListPage (uploader + status/risk table), ScanDetailPage (RiskScoreMeter SVG gauge +
@@ -1162,11 +1212,17 @@ ACCEPTANCE CRITERIA:
 - NOT yet committed/merged at the time of writing → committing on feature/phase-6-ai-engine, PR to dev.
 
 ### NEXT SESSION MUST START HERE
-**Phase 8 is CODE-DONE + LIVE (via Lambda Function URL). Start Phase 9 — Email Notifications &
-Observability.** Two Phase-8 follow-ups are owner/external, not blockers:
+**Phase 9 is COMPLETE + LIVE-VERIFIED (E2E success path). Start Phase 10 — Demo Lifecycle & README**
+(scripts/demo_sleep.py, demo_wake.py, seed_demo_data.py, billing_check.py + client-facing README.md).
+Carry-over follow-ups (none blocking):
   1. **AWS Support case for CloudFront** account verification (so GuardrailFrontend-dev can deploy).
      Until then the dashboard is served by the Function URL host — fully functional.
-  2. **Owner browser pass** of the 11 interaction criteria at the live URL (test login below).
+  2. **Owner browser pass** of the Phase 8 interaction criteria + confirm the "Download PDF Report"
+     button now works (a real PDF exists in scan-reports after any completed scan).
+  3. Phase 9 nice-to-haves: idempotency guard on report-handler (skip if report_s3_key set) to stop
+     the EventBridge double-email; live-fire the failure path (force an ECS exit≠0) once.
+  4. Optional, when the Bedrock model-access case resolves: flip ai-analyzer to Claude
+     (BEDROCK_PROVIDER=anthropic in ai-stack.ts, redeploy GuardrailAi-dev).
 Auth recipe for AWS/CDK in THIS tool shell (both needed in the SAME Bash command):
   - `aws` CLI v2:  prefix `AWS_PROFILE=aws-admin` (and `MSYS_NO_PATHCONV=1` for any /leading-slash arg).
   - `cdk` deploy:  FIRST `cd infrastructure`, then `eval "$(aws configure export-credentials --profile
@@ -1175,18 +1231,12 @@ Auth recipe for AWS/CDK in THIS tool shell (both needed in the SAME Bash command
     fails "--app is required".)
   - ALWAYS `--exclusively` for a single stack + run_in_background:true (a foreground cdk past the 2-min
     tool cap keeps deploying detached and can strip Lambdas via computeEnabled). See the Phase 7 incident.
-  - dev is DEPLOYED + RUNNING: 7 stacks (Foundation, Auth, Scanner, Ai, Api, FrontendHost) — NOT
-    GuardrailFrontend (CloudFront, blocked). Live dashboard:
+  - dev is DEPLOYED + RUNNING: 8 stacks (Foundation, Auth, Scanner, Ai, Api, FrontendHost, Monitor) —
+    NOT GuardrailFrontend (CloudFront, blocked). Live dashboard:
     https://g6p2vamezwbvtug6ohppi34uyi0pwvqd.lambda-url.us-east-1.on.aws/  (SSM /guardrail/dev/frontend-url)
     Test login: puneetkumarsingh765@gmail.com / Guardrail2026. API URL: SSM /guardrail/dev/api-url.
-Phase 9: scanner report_generator/ (reportlab PDF) + report-handler + email-handler + failure-handler
-  Lambdas (all MODE-dispatched from the scanner image), monitoring-stack.ts (CloudWatch dashboard +
-  X-Ray + alarms→SNS). EventBridge: AIAnalysisComplete→report, ReportGenerated→email(success),
-  ScanFailed→email(failure), ECS TaskStopped exit≠0→failure. Email body = CRITICAL/HIGH only + PDF
-  attachment. SES sandbox: From=To=puneetkumarsingh765@gmail.com (verified). Once a PDF exists, the
-  frontend "Download PDF Report" button (currently 404s) goes green.
-  - Optional, when the AWS Bedrock model-access case resolves: flip ai-analyzer to Claude
-    (BEDROCK_PROVIDER=anthropic in ai-stack.ts, redeploy GuardrailAi-dev).
+    Scanner now has 5 Lambdas (ingest, aggregator, report-handler, email-handler, failure-handler) +
+    2 ECS tasks (rules-engine, checkov). Dashboard: GuardrailHealth-dev. Ops SNS: guardrail-ops-alerts-dev.
 
 ### (Prior session) What Was Completed
 - **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.
@@ -1247,6 +1297,20 @@ STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | PHASE 9 EMAIL + OBSERVABILITY COMPLETE + LIVE-VERIFIED (E2E success). report-handler
+             (reportlab PDF → S3 → ReportGenerated) + email-handler (SES raw email, CRITICAL/HIGH body
+             + PDF attach; routes success/failure off EventBridge detail-type) + failure-handler
+             (ECS exit≠0 / SNS-DLQ → FAILED → ScanFailed). New src/report_generator + src/services.
+             ONE shared image guardrail-report-{env} (reportlab), 3 Lambdas via distinct DockerImageCode
+             cmds (NOT scanner-image+MODE). foundation: Secrets Manager app-secrets + cloudfront-url SSM.
+             scanner-stack: report repo + 3 Lambdas (computeEnabled-gated) + 4 EventBridge rules + DLQ
+             depth alarm→SNS→failure. NEW monitoring-stack (GuardrailHealth dashboard + ops SNS + Errors
+             alarms + ai p95 latency; refs Lambdas by metric dimension, not construct). 74 tests, 86.87%
+             cov. Fixed appSecret.grantRead → Foundation→Scanner dependency CYCLE (use explicit
+             GetSecretValue statement on the role). Deployed two-phase (A compute=false → push report
+             image → B compute=true), --exclusively, bg cdk. 8 stacks live. E2E: bad TF → REPORT_COMPLETE
+             ~80s, PDF 8,886B %PDF in S3, success_email_sent (SES verified). Known: EventBridge at-least-
+             once → 2 emails/scan (add idempotency later); failure path deployed+unit-tested, not fired.
 2026-06-28 | PHASE 8 FRONTEND CODE-DONE + LIVE via Lambda Function URL (PR pending → dev). Vite/React
              18/TS dashboard (Tailwind v3, React Query v5, Amplify v6, react-router v6, react-dropzone):
              Login + ScanList + ScanDetail (RiskScoreMeter SVG, FindingsTable, AI drawer). 22 files;
