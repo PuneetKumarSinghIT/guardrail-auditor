@@ -112,8 +112,8 @@ export class AiStack extends cdk.Stack {
       })
     );
 
-    // bedrock:InvokeModel scoped to the 2 inference profiles + their backing
-    // foundation models (never "*"). Both are required for an inference-profile invoke.
+    // anthropic provider: bedrock:InvokeModel scoped to the 2 inference profiles +
+    // their backing foundation models (never "*"). Required once model access is granted.
     analyzerRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["bedrock:InvokeModel"],
@@ -123,6 +123,20 @@ export class AiStack extends cdk.Stack {
           fmArn(EXPLAIN_FM),
           fmArn(FIX_FM),
         ],
+      })
+    );
+
+    // openai_compat provider (works today): the analyzer generates a short-lived bearer
+    // token from THIS role's creds (no stored secret) and calls gpt-oss on the OpenAI-
+    // compatible endpoint, which runs on the `bedrock-mantle` PREVIEW service. Both the
+    // CallWithBearerToken auth and the CreateInference invoke are bedrock-mantle actions
+    // (NOT the bedrock namespace) — discovered from the endpoint's own authz errors;
+    // admin only worked because it had "*". Granted as bedrock-mantle:* (scoped to the
+    // preview service namespace) so additional preview actions don't break it.
+    analyzerRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock-mantle:*"],
+        resources: ["*"],
       })
     );
 
@@ -142,8 +156,14 @@ export class AiStack extends cdk.Stack {
           FINDINGS_TABLE: props.findingsTable.tableName,
           SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
           EVENT_BUS_NAME: props.eventBus.eventBusName,
+          // Provider switch: "openai_compat" works today (gpt-oss via runtime-generated
+          // bearer token, no stored secret); flip to "anthropic" once Bedrock model
+          // access is granted to use Claude Haiku/Sonnet via pure IAM.
+          BEDROCK_PROVIDER: "openai_compat",
           BEDROCK_EXPLAIN_MODEL: EXPLAIN_MODEL,
           BEDROCK_FIX_MODEL: FIX_MODEL,
+          BEDROCK_OPENAI_EXPLAIN_MODEL: "openai.gpt-oss-120b",
+          BEDROCK_OPENAI_FIX_MODEL: "openai.gpt-oss-120b",
           LOG_LEVEL: "INFO",
         },
         tracing: lambda.Tracing.ACTIVE,

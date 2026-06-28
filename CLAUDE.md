@@ -658,7 +658,12 @@ START COMMANDS:
   [x] DEPLOYED to dev (two-phase, --exclusively): repo+Lambda+rule live, wiring-verified via direct
         invoke (reached Bedrock, failed only on model access). Note: conftest adds ai-engine; scanner/
         src/__init__.py removed so `src` is a namespace pkg merging both services in one pytest session.
-  [ ] VERIFY acceptance criteria — BLOCKED on Bedrock model access (AWS case open). Run E2E once granted.
+  [x] VERIFY acceptance criteria — PASSING via the gpt-oss runtime-token bridge (2026-06-28):
+        fully automatic E2E (upload s3-public-bucket.tf → QUEUED→SCANNING→COMPLETE→AI_COMPLETE in
+        ~75s), 13/13 findings have ai_explanation, CRITICAL/HIGH have ai_fix_code (cost guard:
+        MEDIUM/LOW skipped), risk_score=48 populated, pytest 12 passed. gpt-oss cost << $0.05/scan.
+        Claude/anthropic path stays the durable target — flip BEDROCK_PROVIDER=anthropic when model
+        access is granted (AWS case open); zero code change needed.
 
 ═══════════════════════════════════════════════════════════════
 PHASE 7: API Layer
@@ -1058,11 +1063,21 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 — PHASE 6 AI ENGINE DEPLOYED + WIRING-VERIFIED ⚠ (E2E blocked on Bedrock model access)**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 6 AI ENGINE ✅ WORKING E2E IN AWS (gpt-oss runtime-token bridge)**
 
 ### What Was Completed This Session (Phase 6 + ops)
-- **PHASE 6 AI ANALYSIS ENGINE: code + infra written, 43 tests pass (76% cov), DEPLOYED to dev,
-  wiring-verified.** Only the E2E acceptance criteria remain — BLOCKED on Bedrock model access.
+- **PHASE 6 AI ANALYSIS ENGINE: WORKING END-TO-END IN AWS.** Fully automatic pipeline
+  upload→scan→COMPLETE→ScanComplete→ai-analyzer→AI_COMPLETE (~75s); 13/13 findings explained,
+  CRITICAL/HIGH fixed, risk_score set. 47 tests pass.
+- **DUAL-PROVIDER bedrock_client** (BEDROCK_PROVIDER env): "anthropic" (Claude via IAM, durable
+  target, pending model access) and "openai_compat" (gpt-oss TODAY). Deployed with openai_compat.
+- **RUNTIME BEARER-TOKEN GENERATION (no stored secret, never logged):** the analyzer signs a
+  short-lived Bedrock bearer token from its OWN IAM role per call (SigV4-presign CallWithBearerToken)
+  and calls gpt-oss on the OpenAI-compatible endpoint https://bedrock-mantle.us-east-1.api.aws/v1.
+  Signing quirk: `Version=1` goes in the token URL but is EXCLUDED from the signed canonical request.
+  IAM: the `bedrock-mantle` PREVIEW service needs `bedrock-mantle:*` (CallWithBearerToken +
+  CreateInference) — NOT the `bedrock` namespace (discovered from the endpoint's own authz errors).
+- (Earlier same session) Phase 6 code + infra + 12 ai-engine tests, deployed two-phase, committed PR #13.
   - New: ai-engine/ (analyzer.py, bedrock_client.py, 3 prompts, Dockerfile, reqs, 8 tests),
     infrastructure/lib/ai-stack.ts. Modified: app.ts (AiStack wired), deploy_env.sh (5th image),
     conftest.py (+ai-engine). Removed scanner/src/__init__.py → `src` is now a NAMESPACE package
@@ -1088,16 +1103,14 @@ ACCEPTANCE CRITERIA:
 - NOT yet committed/merged at the time of writing → committing on feature/phase-6-ai-engine, PR to dev.
 
 ### NEXT SESSION MUST START HERE
-**Finish Phase 6 VERIFY once Bedrock model access is granted** (user's AWS case). Steps:
-  1. Confirm access: `AWS_PROFILE=aws-admin aws bedrock get-foundation-model-availability
-     --model-id anthropic.claude-haiku-4-5-20251001-v1:0` → authorizationStatus=AUTHORIZED.
-     (Also sonnet-4-6.) Quick invoke smoke test via `aws bedrock-runtime converse`/invoke-model.
-  2. E2E: upload terraform-examples/bad/demo-master-bad.tf → wait for status=AI_COMPLETE → verify
-     every finding has ai_explanation, CRITICAL/HIGH have ai_fix_code, scan-jobs.risk_score set,
-     AIAnalysisComplete published. Check Bedrock token cost < $0.05/scan target.
-  3. Flip Phase 6 VERIFY box [x], mark phase COMPLETE, then Phase 7 (API Layer).
-If access stalls: everything else is ready; no code changes needed — the deployed code uses the
-correct inference-profile IDs and will work the moment access lands.
+**Phase 6 is DONE (working E2E via gpt-oss). Start Phase 7 — API Layer.** Prefix every AWS/CDK
+command with `AWS_PROFILE=aws-admin`.
+  - Optional, when the AWS model-access case resolves: flip the ai-analyzer to Claude by setting
+    BEDROCK_PROVIDER=anthropic in ai-stack.ts (the anthropic path + IAM are already built/deployed),
+    redeploy GuardrailAi-dev. Confirm access first: `aws bedrock get-foundation-model-availability
+    --model-id anthropic.claude-haiku-4-5-20251001-v1:0` → authorizationStatus=AUTHORIZED.
+  - Phase 7: api/ (routes scans + reports), api-stack.ts (API GW + Cognito authorizer + api-handler
+    Lambda, same fromEcr two-phase gate + deploy_env.sh build step as the other services).
 
 ### (Prior session) What Was Completed
 - **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.

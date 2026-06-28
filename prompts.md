@@ -2416,3 +2416,16 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **Tests:** 8 ai-engine passed; full suite 42 passed, 76% coverage (scanner 32 intact).
 **BLOCKER (user action):** Bedrock model access NOT_AUTHORIZED for Haiku 4.5 + Sonnet 4.6 — user enabling in console. After access on: run E2E (scan → AI_COMPLETE w/ explanations+fixes) + finish Phase 6 housekeeping (checklist [x], SESSION TRACKER).
 **Outcome:** IN-PROGRESS — deployed + wiring-verified; pending model access for E2E verification.
+
+## 2026-06-28 18:10 — Phase 6 COMPLETE: gpt-oss runtime-token bridge (working E2E in AWS)
+**User Request:** Bedrock model access is blocked (Claude needs a console use-case form; Nova/OpenAI also unauthorized; admin + AmazonBedrockFullAccess role both proven NOT to bypass account-level model access). User directed: implement a clean RUNTIME bearer-token generation process (short-lived, never stored, never logged), use a model of my choice through it, and make it work. Also asked about OpenAI/ChatGPT-5 (not on Bedrock; only open-weight gpt-oss is).
+**Files Modified:**
+  - ai-engine/src/bedrock_client.py — DUAL PROVIDER (BEDROCK_PROVIDER): "anthropic" (Claude via boto3/IAM, durable target) + "openai_compat" (gpt-oss via OpenAI-compatible endpoint). Added generate_bedrock_bearer_token() — SigV4-presigns CallWithBearerToken from the caller's own IAM creds, base64; fresh per call, never persisted/logged. urllib HTTP (no openai dep). Redacted error logging.
+  - ai-engine/tests/test_bedrock_client.py — +4 tests (token format/Version quirk, openai_compat explain, routing+fresh-token-per-call, reasoning fallback). 12 ai-engine / 47 total pass.
+  - infrastructure/lib/ai-stack.ts — BEDROCK_PROVIDER=openai_compat env + gpt-oss model env; IAM bedrock-mantle:* (the preview service namespace) for CallWithBearerToken + CreateInference.
+**Key findings (hard-won):**
+  - Token signing quirk: `Version=1` must be in the token URL but EXCLUDED from the signed canonical request (caught by diffing the endpoint's redacted 401 canonical string vs botocore's).
+  - The OpenAI-compatible endpoint runs on a SEPARATE preview service `bedrock-mantle` — needs bedrock-mantle:CallWithBearerToken + bedrock-mantle:CreateInference (NOT the bedrock namespace). Discovered from the endpoint's own access_denied bodies; admin only worked because it had "*".
+  - gpt-oss-120b is a reasoning model — needs higher max_completion_tokens (answer in `content`, fallback `reasoning`).
+**Deploy + VERIFY (live AWS):** rebuilt/redeployed ai-analyzer (openai_compat). Fully automatic E2E: upload s3-public-bucket.tf → AI_COMPLETE in ~75s; 13/13 findings explained, CRITICAL/HIGH fixed (cost guard), risk_score=48. Bearer token generated from the Lambda role per call — no secret in code/SM/env/logs.
+**PR:** #13 (updated). **Outcome:** DONE — Phase 6 working E2E. Flip BEDROCK_PROVIDER=anthropic for Claude when the AWS model-access case resolves (no code change).

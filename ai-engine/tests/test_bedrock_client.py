@@ -71,3 +71,82 @@ def test_model_routing_uses_correct_model_per_method():
     fix_kwargs = fake.invoke_model.call_args.kwargs
     assert fix_kwargs["modelId"] == bc.FIX_MODEL
     assert json.loads(fix_kwargs["body"])["max_tokens"] == bc.FIX_MAX_TOKENS
+
+
+# ── openai_compat provider (gpt-oss via runtime bearer token) ────────────────
+
+import base64
+
+
+def test_token_generator_format_and_version_quirk():
+    """Runtime token is base64 of a presigned CallWithBearerToken URL with Version=1
+    appended (Version must be in the token but NOT in the signed canonical request)."""
+    token = bc.generate_bedrock_bearer_token(region="us-east-1")
+    assert token.startswith("bedrock-api-key-")
+    decoded = base64.b64decode(token[len("bedrock-api-key-"):]).decode()
+    assert decoded.startswith("bedrock.amazonaws.com/?Action=CallWithBearerToken")
+    assert decoded.endswith("&Version=1")
+    # Version is appended AFTER the signature params, never signed
+    assert "X-Amz-Signature=" in decoded
+    assert decoded.index("X-Amz-Signature=") < decoded.index("&Version=1")
+
+
+def _openai_response(text: str) -> dict:
+    return {"choices": [{"finish_reason": "stop", "message": {"content": text}}]}
+
+
+def test_openai_compat_explain_returns_content():
+    captured = {}
+
+    def fake_post(url, headers, body, timeout=60):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["body"] = body
+        return _openai_response("This S3 bucket is world-readable.")
+
+    client = BedrockClient(
+        provider="openai_compat",
+        http_post=fake_post,
+        token_generator=lambda region=None: "bedrock-api-key-FAKE",
+    )
+    result = client.explain_risk("explain S3-001")
+
+    assert result == "This S3 bucket is world-readable."
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["headers"]["Authorization"] == "Bearer bedrock-api-key-FAKE"
+    assert captured["body"]["model"] == bc.OPENAI_EXPLAIN_MODEL
+
+
+def test_openai_compat_routing_and_fresh_token_per_call():
+    calls = []
+    tokens = []
+
+    def fake_post(url, headers, body, timeout=60):
+        calls.append(body["model"])
+        return _openai_response("ok")
+
+    def fake_token(region=None):
+        tokens.append(1)
+        return "bedrock-api-key-FAKE"
+
+    client = BedrockClient(
+        provider="openai_compat", http_post=fake_post, token_generator=fake_token
+    )
+    client.explain_risk("e")
+    client.generate_fix("f")
+
+    assert calls == [bc.OPENAI_EXPLAIN_MODEL, bc.OPENAI_FIX_MODEL]
+    assert len(tokens) == 2  # a fresh short-lived token is generated for every call
+
+
+def test_openai_compat_reasoning_fallback_when_content_null():
+    """gpt-oss may return content=null with the answer in `reasoning` — fall back to it."""
+    def fake_post(url, headers, body, timeout=60):
+        return {"choices": [{"message": {"content": None, "reasoning": "fallback answer"}}]}
+
+    client = BedrockClient(
+        provider="openai_compat",
+        http_post=fake_post,
+        token_generator=lambda region=None: "t",
+    )
+    assert client.explain_risk("x") == "fallback answer"
