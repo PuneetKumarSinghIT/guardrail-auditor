@@ -65,6 +65,7 @@ build_push ingest       "scanner/ingest/Dockerfile"       "scanner"
 build_push aggregator   "scanner/aggregator/Dockerfile"   "scanner"
 build_push rules-engine "scanner/rules_engine/Dockerfile" "scanner"
 build_push checkov      "fargate/Dockerfile"              "fargate"
+build_push ai-engine    "ai-engine/Dockerfile"            "ai-engine"
 
 # ── Step 3: add the Lambdas (images now exist) ───────────────────────────────
 echo "==> [3/4] cdk deploy --all (computeEnabled=true) — add Lambdas"

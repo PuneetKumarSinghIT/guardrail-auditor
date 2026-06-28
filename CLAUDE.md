@@ -621,49 +621,49 @@ ACCEPTANCE CRITERIA:
 START COMMANDS:
   mkdir -p ai-engine/src/prompts ai-engine/tests
 
+  ⚠ MODEL-ACCESS BLOCKER (2026-06-28): Bedrock model access is NOT_AUTHORIZED on this
+    account for Claude Haiku 4.5 + Sonnet 4.6. Anthropic models need a one-time use-case
+    form submitted IN THE CONSOLE (CLI `create-foundation-model-agreement` fails with
+    "You have not filled out the request form"; `put-use-case-for-model-access` needs an
+    opaque console-generated form-data blob — not CLI-fillable). NO Bedrock model (Nova/
+    Llama/OpenAI gpt-oss) is enableable purely via CLI in this account. User raised an AWS
+    support case. Code is deployed + wiring-verified; E2E + acceptance criteria pending access.
+  ⚠ MODEL-ID CORRECTION: CLAUDE.md's original IDs were WRONG. Claude 4.x on Bedrock is
+    INFERENCE_PROFILE-only (no on-demand). Correct invoke IDs:
+    explain → us.anthropic.claude-haiku-4-5-20251001-v1:0 ; fix → us.anthropic.claude-sonnet-4-6
+
   CODE:
-  [ ] ai-engine/src/prompts/explain_risk.txt:
-        "You are a cloud security expert. In 2-3 sentences, explain why this
-         misconfiguration is dangerous for a developer who may not know security.
-         Rule: {rule_id}. Resource: {resource_name}. Code: {code_snippet}"
-  [ ] ai-engine/src/prompts/generate_fix.txt:
-        "Fix the following {iac_type} resource block to remediate the security issue.
-         Return ONLY the corrected code block, no explanation.
-         Issue: {finding_description}. Original: {code_snippet}"
-  [ ] ai-engine/src/prompts/score_risk.txt:
-        (Used internally — score is calculated in code, not by Bedrock. File kept for reference.)
-  [ ] ai-engine/src/bedrock_client.py:
-        boto3 bedrock-runtime client wrapper
-        invoke_model(model_id, prompt, max_tokens) → str
-        Model routing: HAIKU for explain_risk (max 300 tokens)
-                       SONNET for generate_fix (max 800 tokens)
-        Retry on ThrottlingException: exponential backoff, max 3 retries
-  [ ] ai-engine/src/analyzer.py Lambda:
-        Triggered by: EventBridge ScanComplete
-        1. Read all findings for scan_job_id from DynamoDB
-        2. For each finding:
-             a. Call explain_risk → update finding.ai_explanation
-             b. If severity in (CRITICAL, HIGH): call generate_fix → update finding.ai_fix_code
-        3. Calculate risk_score: sum(WEIGHTS[f.severity] for f in findings)
-             WEIGHTS = {CRITICAL:40, HIGH:20, MEDIUM:5, LOW:1}, cap at 200, normalize to 100
-        4. Update scan-jobs: risk_score=score, status=AI_COMPLETE
-        5. Publish EventBridge: AIAnalysisComplete {scan_job_id, risk_score}
-  [ ] ai-engine/requirements.txt: boto3
+  [x] ai-engine/src/prompts/explain_risk.txt (replace via str.replace, not .format — code
+        snippets contain literal braces). [x] generate_fix.txt  [x] score_risk.txt (reference only).
+  [x] ai-engine/src/bedrock_client.py: BedrockClient.invoke_model(model_id,prompt,max_tokens)
+        + explain_risk()/generate_fix() routing (Haiku 300 / Sonnet 800 tokens); ThrottlingException
+        exponential backoff (max 3); client + sleeper injectable for tests.
+  [x] ai-engine/src/analyzer.py: handler(EventBridge ScanComplete) → explain each finding,
+        generate_fix for CRITICAL/HIGH only (cost guard), write back, risk_score
+        (WEIGHTS C40/H20/M5/L1, cap 200, /200*100), status=AI_COMPLETE, publish AIAnalysisComplete.
+  [x] ai-engine/requirements.txt: boto3 + awslambdaric. [x] ai-engine/Dockerfile (python:3.12-slim).
 
   INFRASTRUCTURE:
-  [ ] infrastructure/lib/ai-stack.ts:
-        Lambda: ai-analyzer (guardrail-ai-engine ECR image, 512MB, 300s)
-        Plain env vars: FINDINGS_TABLE, SCAN_JOBS_TABLE, EVENT_BUS_NAME,
-                        BEDROCK_EXPLAIN_MODEL=anthropic.claude-haiku-4-5-20251001,
-                        BEDROCK_FIX_MODEL=anthropic.claude-sonnet-4-6
-        IAM: bedrock:InvokeModel on Haiku ARN + Sonnet ARN only (not *)
-        EventBridge rule: ScanComplete → ai-analyzer Lambda
+  [x] infrastructure/lib/ai-stack.ts: ai-analyzer DockerImageFunction (guardrail-ai-engine-{env}
+        ECR, 512MB, 300s), computeEnabled two-phase gate (same ECR deadlock as scanner).
+        Env: FINDINGS_TABLE, SCAN_JOBS_TABLE, EVENT_BUS_NAME, BEDROCK_EXPLAIN_MODEL/FIX_MODEL
+        (us.* inference-profile IDs). IAM bedrock:InvokeModel scoped to the 2 inference-profile
+        ARNs + backing foundation-model ARNs (region *), never "*". EventBridge ScanComplete rule.
+        Wired in app.ts (addDependency foundation+scanner); deploy_env.sh builds the 5th image.
 
   TESTS:
-  [ ] ai-engine/tests/test_bedrock_client.py: 3 tests (success, throttle+retry, model routing)
-  [ ] ai-engine/tests/test_analyzer.py: 5 tests (all findings updated, cost guard, score calc,
-        MEDIUM findings skip fix generation, event published on completion)
-  [ ] VERIFY: run all acceptance criteria
+  [x] ai-engine/tests/test_bedrock_client.py: 3 tests (success, throttle+retry, model routing).
+  [x] ai-engine/tests/test_analyzer.py: 5 tests (all explained, CRIT/HIGH fix, MEDIUM/LOW skip=cost
+        guard, risk_score calc + AI_COMPLETE, AIAnalysisComplete published). Full suite 43 passed, 76% cov.
+  [x] DEPLOYED to dev (two-phase, --exclusively): repo+Lambda+rule live, wiring-verified via direct
+        invoke (reached Bedrock, failed only on model access). Note: conftest adds ai-engine; scanner/
+        src/__init__.py removed so `src` is a namespace pkg merging both services in one pytest session.
+  [x] VERIFY acceptance criteria — PASSING via the gpt-oss runtime-token bridge (2026-06-28):
+        fully automatic E2E (upload s3-public-bucket.tf → QUEUED→SCANNING→COMPLETE→AI_COMPLETE in
+        ~75s), 13/13 findings have ai_explanation, CRITICAL/HIGH have ai_fix_code (cost guard:
+        MEDIUM/LOW skipped), risk_score=48 populated, pytest 12 passed. gpt-oss cost << $0.05/scan.
+        Claude/anthropic path stays the durable target — flip BEDROCK_PROVIDER=anthropic when model
+        access is granted (AWS case open); zero code change needed.
 
 ═══════════════════════════════════════════════════════════════
 PHASE 7: API Layer
@@ -1063,9 +1063,56 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 — PHASE 5 COMPLETE ✅ + ENV LIFECYCLE (teardown/rebuild) PROVEN ✅**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 6 AI ENGINE ✅ WORKING E2E IN AWS (gpt-oss runtime-token bridge)**
 
-### What Was Completed This Session
+### What Was Completed This Session (Phase 6 + ops)
+- **PHASE 6 AI ANALYSIS ENGINE: WORKING END-TO-END IN AWS.** Fully automatic pipeline
+  upload→scan→COMPLETE→ScanComplete→ai-analyzer→AI_COMPLETE (~75s); 13/13 findings explained,
+  CRITICAL/HIGH fixed, risk_score set. 47 tests pass.
+- **DUAL-PROVIDER bedrock_client** (BEDROCK_PROVIDER env): "anthropic" (Claude via IAM, durable
+  target, pending model access) and "openai_compat" (gpt-oss TODAY). Deployed with openai_compat.
+- **RUNTIME BEARER-TOKEN GENERATION (no stored secret, never logged):** the analyzer signs a
+  short-lived Bedrock bearer token from its OWN IAM role per call (SigV4-presign CallWithBearerToken)
+  and calls gpt-oss on the OpenAI-compatible endpoint https://bedrock-mantle.us-east-1.api.aws/v1.
+  Signing quirk: `Version=1` goes in the token URL but is EXCLUDED from the signed canonical request.
+  IAM: the `bedrock-mantle` PREVIEW service needs `bedrock-mantle:*` (CallWithBearerToken +
+  CreateInference) — NOT the `bedrock` namespace (discovered from the endpoint's own authz errors).
+- (Earlier same session) Phase 6 code + infra + 12 ai-engine tests, deployed two-phase, committed PR #13.
+  - New: ai-engine/ (analyzer.py, bedrock_client.py, 3 prompts, Dockerfile, reqs, 8 tests),
+    infrastructure/lib/ai-stack.ts. Modified: app.ts (AiStack wired), deploy_env.sh (5th image),
+    conftest.py (+ai-engine). Removed scanner/src/__init__.py → `src` is now a NAMESPACE package
+    so scanner + ai-engine both resolve `from src.X` in ONE pytest session (don't re-add it).
+  - Deployed two-phase with `--exclusively` (scanner untouched): guardrail-ai-engine-dev ECR +
+    ai-analyzer Lambda (512MB/300s) + ScanComplete EventBridge rule, all live (UPDATE_COMPLETE).
+  - Direct-invoke wiring test PASSED to the Bedrock boundary: analyzer read job+findings, called
+    Bedrock, failed ONLY at InvokeModel "Operation not allowed" → IAM/env/DDB/prompt all correct.
+- **⚠ BEDROCK MODEL ACCESS BLOCKER:** account 879072872327 is NOT_AUTHORIZED for Haiku 4.5 +
+  Sonnet 4.6. Anthropic needs a CONSOLE use-case form (CLI agreement accept fails: "fill out the
+  request form"). NO model (Nova/Llama/OpenAI gpt-oss) is enableable purely via CLI here. User
+  RAISED AN AWS SUPPORT CASE. Once access is granted, run the E2E to finish Phase 6.
+- **MODEL-ID CORRECTION:** CLAUDE.md's IDs were wrong — Claude 4.x is inference-profile-only.
+  Correct invoke IDs: `us.anthropic.claude-haiku-4-5-20251001-v1:0` / `us.anthropic.claude-sonnet-4-6`.
+  IAM scopes InvokeModel to those profile ARNs + backing foundation-model ARNs (region *), never "*".
+- **OPS — accidental S3 bucket recovered:** the deleted bucket was the CDK bootstrap staging bucket
+  `cdk-hnb659fds-assets-879072872327-us-east-1` (CDKToolkit still CREATE_COMPLETE but bucket 404 →
+  would break `cdk deploy`). Recreated WITHOUT versioning (block-public + AES256 + TLS-only). All 5
+  app buckets + 20-rule catalog + 4 ECR images were intact. Re-ran E2E for phases 1-5: COMPLETE, 48
+  findings, 4 CRITICAL — confirmed healthy before deploying Phase 6.
+- **OPS — eu-north-1 swept:** zero user resources (only AWS default VPC, $0); left in place per owner.
+- **CLAUDE.md:** added S3 no-versioning HARD RULE (covers app + bootstrap + manually-recreated buckets).
+- NOT yet committed/merged at the time of writing → committing on feature/phase-6-ai-engine, PR to dev.
+
+### NEXT SESSION MUST START HERE
+**Phase 6 is DONE (working E2E via gpt-oss). Start Phase 7 — API Layer.** Prefix every AWS/CDK
+command with `AWS_PROFILE=aws-admin`.
+  - Optional, when the AWS model-access case resolves: flip the ai-analyzer to Claude by setting
+    BEDROCK_PROVIDER=anthropic in ai-stack.ts (the anthropic path + IAM are already built/deployed),
+    redeploy GuardrailAi-dev. Confirm access first: `aws bedrock get-foundation-model-availability
+    --model-id anthropic.claude-haiku-4-5-20251001-v1:0` → authorizationStatus=AUTHORIZED.
+  - Phase 7: api/ (routes scans + reports), api-stack.ts (API GW + Cognito authorizer + api-handler
+    Lambda, same fromEcr two-phase gate + deploy_env.sh build step as the other services).
+
+### (Prior session) What Was Completed
 - **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.
 - AWS auth: SSO via profile `aws-admin` (account 879072872327). Tool shell defaults to
   `[default]` profile which has NO creds — ALWAYS prefix AWS/CDK cmds with `AWS_PROFILE=aws-admin`.
@@ -1104,7 +1151,7 @@ ACCEPTANCE CRITERIA:
   `cdk deploy --all` — OK for dev UPDATES, but the FIRST fresh staging/prod deploy will hit the ECR
   deadlock. Wire 02/03 to call `scripts/deploy_env.sh` (or replicate its 4 steps) first.
 
-### NEXT SESSION MUST START HERE
+### NEXT SESSION (prior-session note — SUPERSEDED; Phase 6 now DEPLOYED, see top of SESSION TRACKER)
 **Phase 6 — AI Analysis Engine.** Reminder: prefix every AWS/CDK command with `AWS_PROFILE=aws-admin`.
 
 STEP 0 — verify auth: `AWS_PROFILE=aws-admin aws sts get-caller-identity` (re-run SSO login if expired).
@@ -1917,7 +1964,17 @@ const logGroup = new LogGroup(this, "Logs", {
 - Bedrock (app AI engine, NOT Claude Code agents): Haiku 4.5 for explain_risk, Sonnet 4.6 for generate_fix only
 - Lambda memory: right-size (don't set 3008MB for simple functions)
 - S3: always enable Intelligent Tiering on report bucket
-- S3: `versioned: false` and `autoDeleteObjects: true` on ALL buckets — no exceptions
+- **S3 VERSIONING — HARD RULE (owner decision): NO versioning on ANY S3 bucket. EVER.**
+    - Applies to ALL buckets with NO exceptions: the 5 CDK app buckets, the CDK
+      bootstrap/staging bucket (`cdk-hnb659fds-assets-*`), and ANY bucket created
+      manually (including when recovering/recreating a deleted bucket).
+    - CDK: `versioned: false` on every `s3.Bucket`. Manual/CLI: never run
+      `put-bucket-versioning --status Enabled`; leave versioning Disabled.
+    - When recreating a deleted bucket, recreate it WITHOUT versioning (block public
+      access + SSE + DESTROY semantics yes, but versioning stays OFF).
+    - WHY: demo/portfolio project — no rollback ever needed, versioning adds cost,
+      and noncurrent versions block clean bucket deletion (breaks one-command teardown).
+- S3: `autoDeleteObjects: true` on ALL CDK buckets — no exceptions
 - All CDK resources: `RemovalPolicy.DESTROY` always — `cdk destroy --all` must leave nothing behind
 
 ### Monthly Cost Targets

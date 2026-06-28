@@ -1,0 +1,17 @@
+REFERENCE ONLY — the risk score is computed deterministically in code, not by Bedrock.
+
+The analyzer Lambda calculates risk_score from finding severities using fixed weights:
+
+    WEIGHTS = {CRITICAL: 40, HIGH: 20, MEDIUM: 5, LOW: 1}
+    raw         = sum(WEIGHTS[severity] for each finding)
+    normalized  = min(raw, 200)
+    risk_score  = int(normalized / 200 * 100)   # 0-100
+
+UI thresholds:
+    0-30   GREEN     (Low Risk)
+    31-60  ORANGE    (Medium Risk)
+    61-80  RED       (High Risk)
+    81-100 DARK RED  (Critical Risk)
+
+This file is kept per the Phase 6 checklist so the prompt set is complete and the
+scoring contract is documented next to the AI prompts. It is never sent to Bedrock.

@@ -1,0 +1,5 @@
+You are a cloud security expert. In 2-3 sentences, explain why this misconfiguration is dangerous for a developer who may not know security. Be concrete about the real-world risk (data exposure, compromise, compliance). Do not include code.
+
+Rule: {rule_id}
+Resource: {resource_name} ({resource_type})
+Code: {code_snippet}

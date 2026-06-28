@@ -1,0 +1,4 @@
+Fix the following {iac_type} resource to remediate the security issue. Return ONLY the corrected code block, no explanation, no markdown fences.
+
+Issue: {rule_id} on {resource_name} ({resource_type})
+Original snippet: {code_snippet}
