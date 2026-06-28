@@ -2447,3 +2447,10 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **Action Taken:** Live re-verified the deployed analyzer (Active, openai_compat, gpt-oss-120b) — direct invoke returned {statusCode:200, risk_score:48}, no error. Clarified the phase was deployed to the dev ENVIRONMENT but PR #13 was still OPEN; merged PR #13 (squash, all 4 CI checks green) → Phase 6 now on the dev BRANCH (commit 0c2b50d), branch deleted, local dev synced. Confirmed: safe to start a new chat for Phase 7 (API Layer) — CLAUDE.md SESSION TRACKER already points there.
 **Files Changed:** prompts.md (this log). Merged: ai-engine/, ai-stack.ts, etc. via PR #13.
 **Scope Impact:** Phase 6 COMPLETE + promoted to dev. Next: Phase 7.
+
+## 2026-06-28 19:20 — Fix: CI tfsec → Trivy (deprecated tool broke PR checks)
+**User Prompt:** Fix the failing tfsec CI check and redeploy to dev.
+**Root cause:** Aquasecurity ARCHIVED tfsec in favour of Trivy; its install_linux.sh script is now dead, so the "Terraform Security Scan (tfsec)" job failed at install (unrelated to our code).
+**Action Taken:** .github/workflows/01-pr-checks.yml — swapped the tfsec install/run for Trivy's maintained installer + `trivy config terraform-examples/ --exit-code 0` (config mode = IaC misconfig scan; exit-code 0 preserves the old --soft-fail so intentional bad/ findings don't fail the build). KEPT the job display name "Terraform Security Scan (tfsec)" because the staging + main branch rulesets require a status check with that exact context name (dev requires none — which is why the earlier failure didn't block dev merges). Dropped `--no-progress` (removed in recent Trivy). PR #15 → all 4 checks green → merged to dev (b194371).
+**Files Changed:** .github/workflows/01-pr-checks.yml.
+**Scope Impact:** CI hardened; staging/main promotions won't break on the dead tfsec tool. No app/infra change.
