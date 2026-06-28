@@ -2667,3 +2667,33 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   live dashboard serves new bundle. api pytest 8/8; frontend vitest 6/6 + build OK.
 **PR:** (this housekeeping turn) → dev, merged (user-authorized).
 **Outcome:** DONE — CI green, dashboard on API Gateway, upload + PDF download working, README + CLAUDE.md documented.
+
+## 2026-06-29 01:20 — Embed dashboard screenshots in README
+**User Prompt:** Add the screenshots folder images into README so they render.
+**Action Taken:** Embedded the 3 `screenshots/*.jpg` (maindashboard, report_detail,
+  error_reportdetial_fix_detail) in the README Screenshots section with captions; committed the
+  image files (not gitignored) so they render on GitHub.
+**Files Changed:** README.md (Screenshots section), screenshots/*.jpg (3 new files).
+**Scope Impact:** Docs only. PR #23 → dev (CI green, merged). Promoted to dev per request.
+
+## 2026-06-29 01:35 — Fix: dashboard "upload failure error" (S3 CORS)
+**User Prompt:** Upload is giving a failure error — check and fix.
+**Action Taken:** Diagnosed: browser uploads via a cross-origin presigned PUT (XHR) → CORS preflight
+  (OPTIONS); the iac-uploads bucket had NO CORS config (`NoSuchCORSConfiguration`) so the preflight
+  was rejected — curl/Python uploads had passed because they don't preflight. Fix: added a CORS rule
+  (PUT/POST/GET/HEAD, allowedOrigins '*') to the iac-uploads bucket. Applied live via CLI for an
+  immediate fix, baked it into foundation-stack.ts, and deployed GuardrailFoundation-dev. Verified:
+  preflight → HTTP 200 with Access-Control-Allow-Methods PUT.
+**Files Changed:** infrastructure/lib/foundation-stack.ts (uploadsBucket cors), CLAUDE.md (KNOWN
+  DECISIONS row). PR #24 → dev (CI green, merged). Also provided the live link + test credentials.
+**Scope Impact:** Bug fix — browser drag-drop upload now works. No scope change.
+
+## 2026-06-29 01:50 — Add tagle.ai folder to the repo
+**User Prompt:** Update the dev repo with the tagle.ai folder.
+**Action Taken:** Flagged that the repo is PUBLIC and the folder includes a personal "Growth Profile"
+  PDF (permanent in public git history); user confirmed "commit both files". Added tagle.ai/
+  (tagle-architect.png + Your Personal Growth Profile - Tagle.ai.pdf), committed, PR #25 → dev (CI
+  green, merged).
+**Files Changed:** tagle.ai/ (2 new files).
+**Scope Impact:** None (asset addition). Surfaced the public-exposure risk before committing per the
+  hard-to-reverse / outward-facing guidance.
