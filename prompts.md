@@ -2320,3 +2320,36 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **Action Taken:** Confirmed MODE A is active (clarification/scoping session) — prompts.md must be appended after every turn per CLAUDE.md Rule 2. Verified last entry was current (the CLAUDE.md Docker Standards rewrite). Added this entry to close the gap.
 **Files Changed:** prompts.md (this entry)
 **Scope Impact:** None — process confirmation only. Rule 2 behaviour reinforced: every clarification/scoping turn gets a prompts.md entry before the response ends.
+
+---
+
+## 2026-06-28 — Implementation: One ECR repo per service — loosely coupled Docker image architecture
+**User Prompt:** Each Lambda and ECS task must have its own Docker image and ECR repo for loose coupling, independent deployment, and enterprise modularity. Push to GitHub and deploy to AWS. Document as a coding standard in CLAUDE.md.
+**Action Taken:**
+  Reformulated scope into unambiguous spec (4 services × own Dockerfile + ECR repo).
+  Created per-service Dockerfiles with service-specific requirements.txt:
+    scanner/ingest/Dockerfile        — boto3 + awslambdaric only
+    scanner/aggregator/Dockerfile    — boto3 + awslambdaric only
+    scanner/rules_engine/Dockerfile  — boto3 + python-hcl2 + cfn-flip (no awslambdaric — ECS)
+    fargate/Dockerfile               — unchanged (checkov ~500MB)
+  Rewrote infrastructure/lib/scanner-stack.ts:
+    4 ECR repos (guardrail-ingest, guardrail-aggregator, guardrail-rules-engine, guardrail-checkov)
+    Each Lambda references its own ECR repo in DockerImageCode.fromEcr()
+    Each ECS task references its own ECR repo in ContainerImage.fromEcrRepository()
+    ECR pull grants updated: each role only pulls from repos it needs
+    SSM outputs updated: 4 separate ECR URI parameters
+  Updated CLAUDE.md:
+    KNOWN DECISIONS: replaced "Single scanner Docker image" with "One ECR repo per service"
+    Docker Image Standards ECR section: replaced 2-repo table with 4-repo table + build context docs
+    Lambda Specs table: updated Image column to per-service repo names
+    ECS Specs table: updated Image column for rules-engine
+    Phase 5 INFRASTRUCTURE checklist: updated to 4 ECR repo entries
+    Build + push commands: 4 separate docker build + tag + push sequences
+  CDK synth: 0 errors, 0 warnings.
+  git commit 6e39c40 → pushed to feature/phase-5-scanning-engine.
+  CDK deploy: AWS session expired — requires user to re-authenticate then run cdk deploy.
+**Files Changed:** scanner/ingest/Dockerfile, scanner/ingest/requirements.txt,
+  scanner/aggregator/Dockerfile, scanner/aggregator/requirements.txt,
+  scanner/rules_engine/Dockerfile, scanner/rules_engine/requirements.txt,
+  infrastructure/lib/scanner-stack.ts, CLAUDE.md, prompts.md
+**Scope Impact:** Architecture locked: one ECR repo per Lambda/ECS task. Documented as project coding standard. CI/CD workflow (03-deploy-lambdas.yml) will need path-based triggers per service in Phase 9 when GitHub Actions is updated.
