@@ -1353,7 +1353,7 @@ STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
              /guardrail/{env}/demo-state; wake calls seed in-process + prints live URL. billing_check.py:
              Cost Explorer by SERVICE, warns > $15. Windows fix: stdout.reconfigure(utf-8) + ASCII table
              (cp1252 crashed billing on →/box glyphs). LIVE: 3 rows in scan-jobs-dev, dashboard HTTP 200,
-             billing TOTAL $0.95 MTD (< $5 idle / $15 dev). Only Phase 11 remains. PR → dev pending.
+             billing TOTAL $0.95 MTD (< $5 idle / $15 dev). Only Phase 11 remains. PR #20 → dev.
 2026-06-28 | PHASE 9 EMAIL + OBSERVABILITY COMPLETE + LIVE-VERIFIED (E2E success). report-handler
              (reportlab PDF → S3 → ReportGenerated) + email-handler (SES raw email, CRITICAL/HIGH body
              + PDF attach; routes success/failure off EventBridge detail-type) + failure-handler

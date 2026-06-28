@@ -2565,7 +2565,7 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **E2E VERIFIED (live dev):** bad TF → QUEUED→SCANNING→COMPLETE→AI_COMPLETE(risk=48)→REPORT_COMPLETE ~80s;
   PDF 8,886B (%PDF-) in scan-reports; email-handler logged success_email_sent (SES identity Verified).
   Known minor: EventBridge at-least-once → 2 emails/scan. Failure path deployed + unit-tested (not fired).
-**PR:** (pending in this housekeeping turn) → dev
+**PR:** #20 → dev
 **Outcome:** DONE
 
 ## 2026-06-28 18:30 — Phase 10: Demo Lifecycle & README
@@ -2600,5 +2600,5 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   seeds + state=awake + Function URL; dashboard curl HTTP 200; demo_sleep → state=sleeping; billing_check
   → per-service table, TOTAL $0.95 MTD (< $5 idle / $15 dev). 48h-idle + in-browser 10-min rehearsal =
   owner manual steps.
-**PR:** (pending in this housekeeping turn) → dev
+**PR:** #20 → dev
 **Outcome:** DONE
