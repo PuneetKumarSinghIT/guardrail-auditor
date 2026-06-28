@@ -101,7 +101,7 @@ export class ScannerStack extends cdk.Stack {
     this.ingestHandlerFn = new lambda.Function(this, "IngestHandler", {
       functionName: `guardrail-ingest-handler-${env}`,
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "scanner.src.handlers.ingest_handler.handler",
+      handler: "handlers.ingest_handler.handler",
       code: lambda.Code.fromAsset("../scanner"),
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
@@ -119,7 +119,7 @@ export class ScannerStack extends cdk.Stack {
     this.rulesEngineFn = new lambda.Function(this, "RulesEngine", {
       functionName: `guardrail-rules-engine-${env}`,
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "scanner.src.handlers.rules_engine.handler",
+      handler: "handlers.rules_engine.handler",
       code: lambda.Code.fromAsset("../scanner"),
       memorySize: 512,
       timeout: cdk.Duration.seconds(300),
@@ -137,7 +137,7 @@ export class ScannerStack extends cdk.Stack {
     this.aggregatorFn = new lambda.Function(this, "Aggregator", {
       functionName: `guardrail-aggregator-${env}`,
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "scanner.src.handlers.aggregator.handler",
+      handler: "handlers.aggregator.handler",
       code: lambda.Code.fromAsset("../scanner"),
       memorySize: 256,
       timeout: cdk.Duration.seconds(60),
