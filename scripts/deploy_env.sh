@@ -46,7 +46,7 @@ echo "==> [1/4] cdk deploy --all (computeEnabled=false) — repos + ECS, no Lamb
     --context env="${ENV}" --context computeEnabled=false --require-approval never )
 
 # ── Step 2: build + push all 4 images to this env's repos ────────────────────
-echo "==> [2/4] build + push 4 images"
+echo "==> [2/4] build + push 6 images"
 aws ecr get-login-password --region "${REGION}" | docker login --username AWS --password-stdin "${ECR}"
 docker buildx inspect lambdabuilder >/dev/null 2>&1 || docker buildx create --name lambdabuilder --driver docker-container
 docker buildx use lambdabuilder
@@ -66,6 +66,7 @@ build_push aggregator   "scanner/aggregator/Dockerfile"   "scanner"
 build_push rules-engine "scanner/rules_engine/Dockerfile" "scanner"
 build_push checkov      "fargate/Dockerfile"              "fargate"
 build_push ai-engine    "ai-engine/Dockerfile"            "ai-engine"
+build_push api          "api/Dockerfile"                  "api"
 
 # ── Step 3: add the Lambdas (images now exist) ───────────────────────────────
 echo "==> [3/4] cdk deploy --all (computeEnabled=true) — add Lambdas"

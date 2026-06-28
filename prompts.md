@@ -2454,3 +2454,35 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **Action Taken:** .github/workflows/01-pr-checks.yml — swapped the tfsec install/run for Trivy's maintained installer + `trivy config terraform-examples/ --exit-code 0` (config mode = IaC misconfig scan; exit-code 0 preserves the old --soft-fail so intentional bad/ findings don't fail the build). KEPT the job display name "Terraform Security Scan (tfsec)" because the staging + main branch rulesets require a status check with that exact context name (dev requires none — which is why the earlier failure didn't block dev merges). Dropped `--no-progress` (removed in recent Trivy). PR #15 → all 4 checks green → merged to dev (b194371).
 **Files Changed:** .github/workflows/01-pr-checks.yml.
 **Scope Impact:** CI hardened; staging/main promotions won't break on the dead tfsec tool. No app/infra change.
+
+## 2026-06-28 21:30 — Phase 7: API Layer
+**User Request:** Read CLAUDE.md and implement (next phase = Phase 7, API Layer).
+**Files Created:**
+  - api/requirements.txt (3), api/__init__.py (0), api/Dockerfile (16)
+  - api/src/app.py (62) — dispatcher handler (auth → route by resource/method)
+  - api/src/middleware/auth.py (95) — python-jose Cognito JWT (JWKS/RS256/issuer/exp/token_use)
+  - api/src/middleware/cors.py (48) — Decimal-safe JSON response builder + preflight
+  - api/src/routes/scans.py (118) — create_scan (presigned PUT + QUEUED row), list_scans, get_scan
+  - api/src/routes/reports.py (44) — get_report_url (presigned PDF GET, 404 if no report)
+  - api/src/{middleware,routes}/__init__.py, api/tests/__init__.py (0)
+  - api/tests/test_scans.py (5 tests), api/tests/test_middleware.py (3 tests)
+  - infrastructure/lib/api-stack.ts (210) — API GW REST + Cognito authorizer + api Lambda, two-phase ECR gate
+**Files Modified:**
+  - scanner/src/handlers/ingest_handler.py — reuse UUID scan_job_id embedded in uploads/<id>/<file>
+  - conftest.py — register "api" in the shared-namespace src path list
+  - infrastructure/bin/app.ts — wire ApiStack (deps: foundation + auth only)
+  - scripts/deploy_env.sh — build+push the 6th image (api)
+**Bugs Fixed / Gotchas:**
+  - src.main namespace collision avoided: api entrypoint named src/app.py (scanner owns src.main).
+  - Single-record consistency: ingest no longer mints a 2nd job row when the key carries a UUID.
+  - CDK SSO creds: node SDK ignored the aws-admin SSO cache → export-credentials + CDK_DEFAULT_* in-line.
+  - Git Bash mangled /guardrail/dev/api-url into a Windows path → MSYS_NO_PATHCONV=1 fixes false 404.
+  - INCIDENT: a foreground `cdk deploy` (no --exclusively, computeEnabled=false) timed out at the
+    2-min tool cap but kept running detached and STRIPPED scanner+ai Lambdas. Recovered: kill PID →
+    delete REVIEW_IN_PROGRESS api stack → recreate api repo (compute=false) → push api image →
+    `cdk deploy --all` (compute=true) restored all Lambdas + created api. All 5 stacks UPDATE_COMPLETE.
+**Tests:** 55 passed, 85.86% coverage (api app 82% / auth 80% / cors 94% / scans 95% / reports 88%).
+**Live verify (dev, real Cognito JWT):** no-JWT→401; POST /v1/scans→200 {presigned_url, scan_job_id};
+  GET /v1/scans→200 list; GET /v1/scans/{id}→200 detail; GET /v1/scans/{id}/report→404 (no PDF yet).
+**PR:** #17 → dev
+**Outcome:** DONE
