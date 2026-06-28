@@ -5,6 +5,7 @@ import { FoundationStack } from '../lib/foundation-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { ScannerStack } from '../lib/scanner-stack';
 import { AiStack } from '../lib/ai-stack';
+import { ApiStack } from '../lib/api-stack';
 
 const app = new cdk.App();
 
@@ -48,3 +49,22 @@ const ai = new AiStack(app, `GuardrailAi-${env}`, {
 });
 ai.addDependency(foundation);
 ai.addDependency(scanner);
+
+const api = new ApiStack(app, `GuardrailApi-${env}`, {
+  env: awsEnv,
+  description: `Guardrail Auditor - REST API (${env})`,
+  scanJobsTable: foundation.scanJobsTable,
+  findingsTable: foundation.findingsTable,
+  rulesCatalogTable: foundation.rulesCatalogTable,
+  uploadsBucket: foundation.uploadsBucket,
+  reportsBucket: foundation.reportsBucket,
+  kmsKey: foundation.encryptionKey,
+  userPool: auth.userPool,
+  userPoolClient: auth.userPoolClient,
+});
+// Api only consumes foundation (tables/buckets) + auth (user pool) exports.
+// It does NOT reference scanner/ai resources, so no dependency on them — that
+// keeps `cdk deploy GuardrailApi-dev` from pulling the running scanner/ai stacks
+// into the deploy set (which under computeEnabled=false would strip their Lambdas).
+api.addDependency(foundation);
+api.addDependency(auth);

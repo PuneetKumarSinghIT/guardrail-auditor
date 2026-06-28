@@ -21,7 +21,7 @@ import sys
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
-for _service in ("scanner", "ai-engine"):
+for _service in ("scanner", "ai-engine", "api"):
     _service_dir = os.path.join(_ROOT, _service)
     if os.path.isdir(os.path.join(_service_dir, "src")) and _service_dir not in sys.path:
         sys.path.insert(0, _service_dir)
