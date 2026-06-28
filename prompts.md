@@ -2353,3 +2353,18 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   scanner/rules_engine/Dockerfile, scanner/rules_engine/requirements.txt,
   infrastructure/lib/scanner-stack.ts, CLAUDE.md, prompts.md
 **Scope Impact:** Architecture locked: one ECR repo per Lambda/ECS task. Documented as project coding standard. CI/CD workflow (03-deploy-lambdas.yml) will need path-based triggers per service in Phase 9 when GitHub Actions is updated.
+
+## 2026-06-28 13:10 — Phase 5: Scanning Engine (DEPLOY + VERIFY)
+**User Request:** "read claude.md and start implementation" — resume Phase 5 from SESSION TRACKER (deploy 4 ECR repos, push images, verify acceptance criteria end-to-end).
+**Files Created:** none (code complete from prior session).
+**Files Modified:** infrastructure/lib/scanner-stack.ts (added `computeEnabled` two-phase deploy flag — gates the 2 Lambdas + S3UploadRule; made ingestHandlerFn/aggregatorFn optional); CLAUDE.md (Phase 5 → COMPLETE, VERIFY [x], ECR images [x], SESSION TRACKER → Phase 6, Session Log); prompts.md.
+**Bugs Fixed:**
+  - AWS session expired → identified SSO profile `aws-admin` (acct 879072872327); tool shell defaults to credential-less `[default]` profile, must prefix AWS_PROFILE=aws-admin.
+  - CDK update failed: changing custom-named Lambda image source (old single repo → per-service repo) requires replacement, which CFN forbids for named resources → resolved by two-phase deploy that deletes old Lambdas in Phase A then recreates in Phase B.
+  - Bootstrap deadlock: lambda.DockerImageFunction.fromEcr requires image at CreateFunction time but the stack creates the ECR repos → added computeEnabled context flag (Phase A=repos+ECS, push images, Phase B=Lambdas). ECS task defs don't validate images at registration so they deploy either phase.
+  - Lambda "image manifest media type not supported": Docker 29 BuildKit default emits OCI image index + provenance attestations that Lambda rejects → rebuilt the 2 Lambda images with buildx docker-container driver, --provenance=false --sbom=false --output type=image,oci-mediatypes=false,push=true. ECS images (rules-engine, checkov) use plain docker build (ECS accepts OCI).
+**Deployed:** GuardrailScanner-dev — 4 ECR repos + images, ingest/aggregator Lambdas, rules-engine/checkov ECS task defs, VPC (0 NAT), ECS cluster, SQS+DLQ, EventBridge S3Upload + ScanRequested rules.
+**Acceptance Criteria (ALL PASS):** demo-master-bad.tf → scan-jobs status=COMPLETE in <5min; 48 findings; 4 CRITICAL (S3-001, SG-001/2/3); both layers present (custom S3/SG/IAM/ENC/LOG + Checkov CKV_AWS_*) deduped by aggregator; pytest 32 passed, 70% coverage.
+**Leftover (Phase 11 cleanup):** orphaned old-VPC RestrictDefaultSecurityGroup custom resource (DELETE skipped) + orphan ECR repo guardrail-scanner (no -dev). Non-blocking.
+**PR:** #9 (already open → dev) — pending push of scanner-stack.ts + docs.
+**Outcome:** DONE

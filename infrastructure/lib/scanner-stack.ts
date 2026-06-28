@@ -35,8 +35,10 @@ interface ScannerStackProps extends cdk.StackProps {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class ScannerStack extends cdk.Stack {
-  public readonly ingestHandlerFn: lambda.DockerImageFunction;
-  public readonly aggregatorFn: lambda.DockerImageFunction;
+  // Optional: only created on the compute pass (computeEnabled !== "false").
+  // Phase A bootstrap deploy skips them so ECR repos exist before images are pushed.
+  public readonly ingestHandlerFn?: lambda.DockerImageFunction;
+  public readonly aggregatorFn?: lambda.DockerImageFunction;
   public readonly checkovResultsQueue: sqs.Queue;
 
   // Expose ECR repo URIs so CI/CD (GitHub Actions) can push images
@@ -50,6 +52,19 @@ export class ScannerStack extends cdk.Stack {
 
     const env = this.node.tryGetContext("env") ?? "dev";
     const removalPolicy = cdk.RemovalPolicy.DESTROY;
+
+    // ── Two-phase deploy flag ────────────────────────────────────────────────
+    // lambda.DockerImageFunction.fromEcr requires the image to exist at
+    // CreateFunction time, but this stack also creates the ECR repos — a
+    // bootstrap deadlock on first create. ECS task defs do NOT validate images
+    // at registration (only at RunTask), so they deploy regardless.
+    //   Phase A:  cdk deploy ... --context computeEnabled=false
+    //             → creates ECR repos + ECS + SQS + VPC, skips the 2 Lambdas
+    //   (push the 4 images)
+    //   Phase B:  cdk deploy ...           (default — computeEnabled true)
+    //             → adds the ingest + aggregator Lambdas, images now present
+    const computeEnabled =
+      this.node.tryGetContext("computeEnabled") !== "false";
 
     const commonTags = {
       Project: "SecurityGuardrailAuditor",
@@ -188,57 +203,60 @@ export class ScannerStack extends cdk.Stack {
       LOG_LEVEL: "INFO",
     };
 
-    // ── Lambda: ingest-handler ───────────────────────────────────────────────
-    // Image: guardrail-ingest-{env} ECR repo
-    // entrypoint + cmd: awslambdaric calls ingest_handler.handler(event, context)
-    this.ingestHandlerFn = new lambda.DockerImageFunction(
-      this,
-      "IngestHandler",
-      {
-        functionName: `guardrail-ingest-handler-${env}`,
-        code: lambda.DockerImageCode.fromEcr(this.ingestEcrRepo, {
+    // ── Lambdas (compute pass only — see two-phase deploy flag above) ────────
+    if (computeEnabled) {
+      // ── Lambda: ingest-handler ─────────────────────────────────────────────
+      // Image: guardrail-ingest-{env} ECR repo
+      // entrypoint + cmd: awslambdaric calls ingest_handler.handler(event, context)
+      this.ingestHandlerFn = new lambda.DockerImageFunction(
+        this,
+        "IngestHandler",
+        {
+          functionName: `guardrail-ingest-handler-${env}`,
+          code: lambda.DockerImageCode.fromEcr(this.ingestEcrRepo, {
+            tagOrDigest: `${env}-latest`,
+            entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
+            cmd: ["src.handlers.ingest_handler.handler"],
+          }),
+          memorySize: 256,
+          timeout: cdk.Duration.seconds(30),
+          role: lambdaRole,
+          environment: commonLambdaEnv,
+          tracing: lambda.Tracing.ACTIVE,
+          logGroup: new logs.LogGroup(this, "IngestHandlerLogs", {
+            logGroupName: `/guardrail/${env}/lambda/ingest-handler`,
+            retention: logs.RetentionDays.ONE_WEEK,
+            removalPolicy,
+          }),
+        }
+      );
+
+      // ── Lambda: aggregator ─────────────────────────────────────────────────
+      // Image: guardrail-aggregator-{env} ECR repo
+      // Triggered by SQS guardrail-checkov-results queue
+      this.aggregatorFn = new lambda.DockerImageFunction(this, "Aggregator", {
+        functionName: `guardrail-aggregator-${env}`,
+        code: lambda.DockerImageCode.fromEcr(this.aggregatorEcrRepo, {
           tagOrDigest: `${env}-latest`,
           entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
-          cmd: ["src.handlers.ingest_handler.handler"],
+          cmd: ["src.handlers.aggregator.handler"],
         }),
         memorySize: 256,
-        timeout: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(60),
         role: lambdaRole,
         environment: commonLambdaEnv,
         tracing: lambda.Tracing.ACTIVE,
-        logGroup: new logs.LogGroup(this, "IngestHandlerLogs", {
-          logGroupName: `/guardrail/${env}/lambda/ingest-handler`,
+        logGroup: new logs.LogGroup(this, "AggregatorLogs", {
+          logGroupName: `/guardrail/${env}/lambda/aggregator`,
           retention: logs.RetentionDays.ONE_WEEK,
           removalPolicy,
         }),
-      }
-    );
+      });
 
-    // ── Lambda: aggregator ───────────────────────────────────────────────────
-    // Image: guardrail-aggregator-{env} ECR repo
-    // Triggered by SQS guardrail-checkov-results queue
-    this.aggregatorFn = new lambda.DockerImageFunction(this, "Aggregator", {
-      functionName: `guardrail-aggregator-${env}`,
-      code: lambda.DockerImageCode.fromEcr(this.aggregatorEcrRepo, {
-        tagOrDigest: `${env}-latest`,
-        entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
-        cmd: ["src.handlers.aggregator.handler"],
-      }),
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(60),
-      role: lambdaRole,
-      environment: commonLambdaEnv,
-      tracing: lambda.Tracing.ACTIVE,
-      logGroup: new logs.LogGroup(this, "AggregatorLogs", {
-        logGroupName: `/guardrail/${env}/lambda/aggregator`,
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy,
-      }),
-    });
-
-    this.aggregatorFn.addEventSource(
-      new SqsEventSource(this.checkovResultsQueue, { batchSize: 10 })
-    );
+      this.aggregatorFn.addEventSource(
+        new SqsEventSource(this.checkovResultsQueue, { batchSize: 10 })
+      );
+    }
 
     // ── VPC: public subnets only, zero NAT gateways ($0 idle cost) ───────────
     // Fargate tasks use assignPublicIp:true to reach ECR/S3 via internet.
@@ -375,23 +393,26 @@ export class ScannerStack extends cdk.Stack {
     });
 
     // ── EventBridge: S3 ObjectCreated → ingest-handler Lambda ───────────────
-    const defaultBus = events.EventBus.fromEventBusName(
-      this,
-      "DefaultBus",
-      "default"
-    );
-    new events.Rule(this, "S3UploadRule", {
-      ruleName: `guardrail-s3-upload-${env}`,
-      eventBus: defaultBus,
-      eventPattern: {
-        source: ["aws.s3"],
-        detailType: ["Object Created"],
-        detail: {
-          bucket: { name: [props.uploadBucket.bucketName] },
+    // Compute pass only — depends on the ingest Lambda created above.
+    if (computeEnabled) {
+      const defaultBus = events.EventBus.fromEventBusName(
+        this,
+        "DefaultBus",
+        "default"
+      );
+      new events.Rule(this, "S3UploadRule", {
+        ruleName: `guardrail-s3-upload-${env}`,
+        eventBus: defaultBus,
+        eventPattern: {
+          source: ["aws.s3"],
+          detailType: ["Object Created"],
+          detail: {
+            bucket: { name: [props.uploadBucket.bucketName] },
+          },
         },
-      },
-      targets: [new targets.LambdaFunction(this.ingestHandlerFn)],
-    });
+        targets: [new targets.LambdaFunction(this.ingestHandlerFn!)],
+      });
+    }
 
     // ── EventBridge: ScanRequested → rules-engine + checkov (parallel) ───────
     // Both fire from the same event on the CUSTOM guardrail bus.

@@ -519,7 +519,7 @@ START COMMANDS:
   [x] VERIFY: all acceptance criteria met via CI (PR #7 merged to dev, 2026-06-28)
 
 ═══════════════════════════════════════════════════════════════
-PHASE 5: Scanning Engine
+PHASE 5: Scanning Engine                            ✅ COMPLETE
 ═══════════════════════════════════════════════════════════════
 GOAL: A QUEUED job triggers a two-layer scan (custom rules + Checkov)
       and all findings are written to DynamoDB.
@@ -588,17 +588,22 @@ START COMMANDS:
   [x] ECS Cluster: guardrail-cluster — VPC: public subnets only, natGateways=0, assignPublicIp=true on tasks
   [x] scanner/Dockerfile: FROM public.ecr.aws/lambda/python:3.12 (single image for Lambda + ECS)
   [x] EventBridge rule: ScanRequested → rules-engine ECS RunTask AND checkov ECS RunTask (both Fargate)
-  [ ] ECR images NOT yet pushed — required before Lambda or ECS task can run:
-        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account}.dkr.ecr.us-east-1.amazonaws.com
-        docker build -t guardrail-scanner scanner/ && docker tag guardrail-scanner:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest && docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
-        docker build -t guardrail-checkov fargate/ && docker tag guardrail-checkov:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-checkov-dev:dev-latest && docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-checkov-dev:dev-latest
+  [x] ECR images built + pushed (all 4 per-service repos, 2026-06-28):
+        guardrail-ingest-dev, guardrail-aggregator-dev (Lambda — built via buildx
+          --provenance=false --output oci-mediatypes=false for Lambda manifest compat),
+        guardrail-rules-engine-dev, guardrail-checkov-dev (ECS — standard docker build)
+        NOTE: Lambda rejects Docker-29 BuildKit default (OCI image index w/ provenance
+          attestations) → "image manifest media type not supported". Use buildx
+          docker-container driver + oci-mediatypes=false for ANY fromEcr Lambda image.
 
   TESTS:
   [x] scanner/tests/test_terraform_parser.py: 5 tests (valid, empty, nested, multi-resource, malformed)
   [x] scanner/tests/test_cloudformation_parser.py: 5 tests
   [x] scanner/tests/test_rules_engine.py: 1 test per rule category (6 tests minimum)
   [x] scanner/tests/test_aggregator.py: 3 tests (dedupe, status update, event publish)
-  [~] VERIFY: upload demo-master-bad.tf → run all acceptance criteria
+  [x] VERIFY: upload demo-master-bad.tf → ALL acceptance criteria PASS (2026-06-28):
+        status=COMPLETE in <5min; 48 findings; 4 CRITICAL (S3-001, SG-001/2/3);
+        both layers present (custom S3/SG/IAM/ENC/LOG + Checkov CKV_*); pytest 32 passed, 70% cov
 
 ═══════════════════════════════════════════════════════════════
 PHASE 6: AI Analysis Engine
@@ -1058,72 +1063,49 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026**
+**MOST RECENT SESSION: June 28, 2026 (afternoon) — PHASE 5 COMPLETE ✅**
 
 ### What Was Completed This Session
-- CLAUDE.md Docker Image Standards completely rewritten — python:3.12-slim + awslambdaric locked as standard
-- KNOWN DECISIONS: 5 new entries (per-service ECR, python:3.12-slim, awslambdaric, absolute imports, ECS env-var pattern)
-- WHAT DEGRADES PERFORMANCE: 6 new anti-patterns documented (AWS Lambda base image, relative imports, ZIP packaging, etc.)
-- **Architecture change: one ECR repo per service** (loosely coupled, independently deployable):
-  - scanner/ingest/Dockerfile + requirements.txt → guardrail-ingest-dev
-  - scanner/aggregator/Dockerfile + requirements.txt → guardrail-aggregator-dev
-  - scanner/rules_engine/Dockerfile + requirements.txt → guardrail-rules-engine-dev
-  - fargate/Dockerfile → guardrail-checkov-dev (unchanged)
-- scanner-stack.ts rewritten: 4 ECR repos, each Lambda/ECS uses its own repo, ECR URIs in SSM
-- scanner/src/main.py added (ECS dispatcher), rules_engine.py fixed (absolute imports + main())
-- CDK synth: 0 errors. git push → commit 9d290bf on feature/phase-5-scanning-engine
-- prompts.md: all session turns logged (MODE A entries)
+- **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.
+- AWS auth: SSO via profile `aws-admin` (account 879072872327). Tool shell defaults to
+  `[default]` profile which has NO creds — ALWAYS prefix AWS/CDK cmds with `AWS_PROFILE=aws-admin`.
+- **Two-phase deploy pattern added** to scanner-stack.ts (bootstrap deadlock fix):
+  - `lambda.DockerImageFunction.fromEcr` needs the image at CreateFunction time, but the
+    stack also creates the ECR repos → deadlock on fresh create. ECS task defs don't validate.
+  - Gated the 2 Lambdas + S3UploadRule behind `computeEnabled` context flag.
+  - Phase A: `cdk deploy ... --context computeEnabled=false` → repos+ECS+SQS+VPC (no Lambdas).
+  - Push 4 images. Phase B: `cdk deploy ...` (default) → adds Lambdas (images now present).
+- **Lambda image manifest fix:** Docker 29 BuildKit default → OCI image index w/ provenance
+  attestations → Lambda "image manifest media type not supported". Fixed by building the 2
+  Lambda images with buildx docker-container driver + `--provenance=false`
+  `--output type=image,oci-mediatypes=false,push=true`. ECS images use plain `docker build`.
+- All 4 ECR repos created + images pushed: guardrail-{ingest,aggregator,rules-engine,checkov}-dev.
+- E2E verified: uploaded demo-master-bad.tf → status=COMPLETE in <5min, 48 findings,
+  4 CRITICAL (S3-001, SG-001/2/3), both layers (custom + Checkov) present + deduped.
+- pytest: 32 passed, 70% coverage. Only code change this session: scanner-stack.ts (bootstrap flag).
+
+### KNOWN LEFTOVER (low priority — clean up in Phase 11 tag/cost audit)
+- One orphaned custom resource `ScannerClusterVpc...RestrictDefaultSecurityGroup` from an OLD VPC
+  failed to delete during Phase A (its backing Lambda was already gone). DELETE was skipped — may
+  leave a default-SG custom-resource artifact. Also orphan ECR repo `guardrail-scanner` (no -dev
+  suffix) from earlier single-repo design. Neither blocks anything; remove during cleanup.
 
 ### NEXT SESSION MUST START HERE
-**Phase 5 — Complete ECR deploy + verify acceptance criteria, then start Phase 6**
+**Phase 6 — AI Analysis Engine.** Reminder: prefix every AWS/CDK command with `AWS_PROFILE=aws-admin`.
 
-STEP 1 — Re-authenticate AWS (session expired):
-  ```
-  aws sts get-caller-identity   # verify auth works before proceeding
-  ```
-
-STEP 2 — Deploy scanner stack (creates all 4 ECR repos in AWS):
-  ```
-  cd infrastructure
-  npx cdk deploy GuardrailScanner-dev --context env=dev --require-approval never
-  ```
-
-STEP 3 — Build and push all 4 service images:
-  ```
-  ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-  ECR=${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com
-  aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
-
-  docker build -f scanner/ingest/Dockerfile -t guardrail-ingest scanner/
-  docker tag guardrail-ingest:latest $ECR/guardrail-ingest-dev:dev-latest
-  docker push $ECR/guardrail-ingest-dev:dev-latest
-
-  docker build -f scanner/aggregator/Dockerfile -t guardrail-aggregator scanner/
-  docker tag guardrail-aggregator:latest $ECR/guardrail-aggregator-dev:dev-latest
-  docker push $ECR/guardrail-aggregator-dev:dev-latest
-
-  docker build -f scanner/rules_engine/Dockerfile -t guardrail-rules-engine scanner/
-  docker tag guardrail-rules-engine:latest $ECR/guardrail-rules-engine-dev:dev-latest
-  docker push $ECR/guardrail-rules-engine-dev:dev-latest
-
-  docker build -t guardrail-checkov fargate/
-  docker tag guardrail-checkov:latest $ECR/guardrail-checkov-dev:dev-latest
-  docker push $ECR/guardrail-checkov-dev:dev-latest
-  ```
-
-STEP 4 — Verify Phase 5 acceptance criteria:
-  ```
-  aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{ACCOUNT}-dev/test.tf
-  # Wait ~2 minutes then:
-  aws dynamodb scan --table-name scan-jobs-dev
-  # Look for status=COMPLETE, then get scan_job_id and:
-  aws dynamodb query --table-name findings-dev \
-    --key-condition-expression "scan_job_id = :id" \
-    --expression-attribute-values '{":id":{"S":"<scan_job_id>"}}'
-  # Verify: ≥5 findings, ≥1 has severity=CRITICAL
-  ```
-
-STEP 5 — If all pass: mark Phase 5 VERIFY [x] → start Phase 6 (AI Analysis Engine)
+STEP 0 — verify auth: `AWS_PROFILE=aws-admin aws sts get-caller-identity` (re-run SSO login if expired).
+STEP 1 — Write ai-engine/ per Phase 6 checklist: prompts (explain_risk/generate_fix/score_risk),
+         bedrock_client.py (Haiku explain / Sonnet fix, retry w/ backoff), analyzer.py Lambda
+         (EventBridge ScanComplete → explain+fix each finding, risk_score, AIAnalysisComplete event).
+STEP 2 — ai-engine/Dockerfile (python:3.12-slim + awslambdaric), guardrail-ai-engine-dev ECR repo.
+STEP 3 — infrastructure/lib/ai-stack.ts (ai-analyzer Lambda, IAM bedrock:InvokeModel on Haiku+Sonnet
+         ARNs only, EventBridge ScanComplete rule). Wire in app.ts with addDependency(scanner).
+STEP 4 — Tests: ai-engine/tests/ (test_bedrock_client 3, test_analyzer 5). pytest ≥70%.
+STEP 5 — DEPLOY: build+push guardrail-ai-engine-dev (USE buildx Lambda-compat flags — see above),
+         then cdk deploy GuardrailAiEngine-dev. NOTE: new AI Lambda also uses fromEcr → if ai-stack
+         creates its OWN ai-engine repo, it hits the SAME bootstrap deadlock. Either add a
+         computeEnabled-style flag to ai-stack, OR create the repo in foundation/scanner stack first.
+STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
@@ -1141,6 +1123,15 @@ STEP 5 — If all pass: mark Phase 5 VERIFY [x] → start Phase 6 (AI Analysis E
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | PHASE 5 DEPLOYED + VERIFIED ✅. Scanner stack live in AWS (acct 879072872327).
+             AWS auth = SSO profile aws-admin (tool shell needs AWS_PROFILE=aws-admin prefix).
+             Fixed 2 deploy blockers: (1) bootstrap deadlock — Lambda fromEcr needs image at
+             create but stack makes the repo → added computeEnabled two-phase flag to
+             scanner-stack.ts. (2) Docker 29 BuildKit OCI/provenance manifest → Lambda reject →
+             rebuilt 2 Lambda images via buildx docker-container --provenance=false oci-mediatypes=false.
+             E2E: demo-master-bad.tf → COMPLETE <5min, 48 findings, 4 CRITICAL, both layers.
+             pytest 32 passed 70% cov. Only code change: scanner-stack.ts. Next: Phase 6 AI engine.
+
 2026-06-28 | TOKEN EFFICIENCY PROTOCOL rewritten. Haiku retired from Claude Code workflow.
              Sonnet 4.6 now handles ALL tasks inline — no subagents for routine work.
              ECR image push blocker documented. Phase 5 VERIFY pending ECR fix.
