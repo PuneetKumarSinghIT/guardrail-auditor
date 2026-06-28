@@ -2368,3 +2368,23 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
 **Leftover (Phase 11 cleanup):** orphaned old-VPC RestrictDefaultSecurityGroup custom resource (DELETE skipped) + orphan ECR repo guardrail-scanner (no -dev). Non-blocking.
 **PR:** #9 (already open → dev) — pending push of scanner-stack.ts + docs.
 **Outcome:** DONE
+
+## 2026-06-28 14:30 — Lifecycle: tested teardown guarantee + reliable promotion
+**User Request:** Guarantee (and TEST) that the whole IaC-provisioned infra tears down to a $0 empty account with no stuck CloudFormation (S3 emptied, all deps handled); make dev→staging promotion sequence-aware so it never fails; document all of it in CLAUDE.md so it's understood on first read.
+**Files Created:**
+  - scripts/seed_rules_catalog.py (~55 lines) — seeds rules-catalog-{env} from rules/rules-catalog.json (idempotent).
+  - scripts/deploy_env.sh (~85 lines) — intelligent 4-step bootstrap: deploy(computeEnabled=false) → push 4 images (Lambda-compat buildx) → deploy(computeEnabled=true) → seed rules. One path for setup AND dev/staging/prod promotion.
+**Files Modified:**
+  - infrastructure/lib/scanner-stack.ts — VPC restrictDefaultSecurityGroup:false (removes the flaky default-SG custom resource that causes DELETE_FAILED).
+  - CLAUDE.md — new "ENVIRONMENT LIFECYCLE — SETUP, PROMOTION & TEARDOWN" section (per-resource teardown table, must-stop-tasks rule, KMS 7-day note, promotion via deploy_env.sh); 4 new KNOWN DECISIONS rows.
+  - prompts.md.
+**Engineering findings:**
+  - Bare `cdk deploy --all` FAILS on fresh env (ECR bootstrap deadlock) → staging promotion would have failed. Fixed via deploy_env.sh sequence.
+  - rules-catalog was never auto-seeded (no script existed; prior run seeded manually) → fresh env would find 0 custom rules. Fixed via seed step.
+  - CDK RestrictDefaultSecurityGroup custom resource = teardown-blocker → disabled.
+**TESTED END-TO-END (live AWS, acct 879072872327):**
+  - Deployed teardown fix → `cdk destroy --all` → swept account: 0 stacks, 0 S3, 0 ECR (orphan guardrail-scanner deleted), 0 DDB/Lambda/ECS/VPC/Cognito/SQS/SNS/IAM/logs/SSM/ENIs. Only KMS key in 7-day PendingDeletion ($0). NO DELETE_FAILED.
+  - Rebuilt from empty via scripts/deploy_env.sh dev → all stacks CREATE_COMPLETE, 4 images pushed, 20 rules seeded.
+  - E2E: uploaded demo-master-bad.tf → COMPLETE, 48 findings (9 custom + 39 Checkov), 4 CRITICAL. Custom layer fires only because seeding works.
+**Tests:** N/A (infra/scripts); existing pytest unaffected.
+**Outcome:** DONE — teardown $0-clean and clean rebuild both proven; promotion now reliable; documented in CLAUDE.md.

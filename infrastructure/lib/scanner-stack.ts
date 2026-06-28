@@ -265,6 +265,12 @@ export class ScannerStack extends cdk.Stack {
       vpcName: `guardrail-vpc-${env}`,
       maxAzs: 2,
       natGateways: 0,
+      // TEARDOWN SAFETY: CDK's default RestrictDefaultSecurityGroup custom resource
+      // (a CR-backed Lambda that empties the default SG) intermittently fails on
+      // stack DELETE — once its backing Lambda is gone the CR can't run, leaving the
+      // stack in DELETE_FAILED. We don't use the default SG, so disable the CR
+      // entirely. One less moving part that can wedge `cdk destroy`.
+      restrictDefaultSecurityGroup: false,
       subnetConfiguration: [
         {
           name: "public",

@@ -1938,6 +1938,84 @@ wildcard IAM policy, no CloudTrail — triggers all CRITICAL rules in one scan.
 
 ---
 
+## ENVIRONMENT LIFECYCLE — SETUP, PROMOTION & TEARDOWN (TESTED, MUST STAY TRUE)
+
+**This project must be self-sustainable and reliable: a clean environment comes up
+with ONE command, promotes dev→staging→prod without failing, and tears down to a
+$0 empty account with ONE command. This was tested end-to-end on 2026-06-28
+(full destroy → verify empty → fresh rebuild → E2E pass). Every future change to
+infra MUST preserve these two guarantees. When you add a new AWS resource, you are
+NOT done until you have confirmed BOTH: (a) it deploys via the bootstrap sequence,
+and (b) it is removed by `cdk destroy --all` with no manual step and no stuck stack.**
+
+### SETUP / PROMOTION — always use `scripts/deploy_env.sh`, never bare `cdk deploy --all`
+
+```
+AWS_PROFILE=aws-admin scripts/deploy_env.sh dev        # local
+scripts/deploy_env.sh staging                          # CI (OIDC role already assumed)
+```
+
+A bare `cdk deploy --all` on a FRESH environment **FAILS** — the ECR bootstrap
+deadlock: `lambda.DockerImageFunction.fromEcr` needs its image at CreateFunction
+time, but the scanner stack also creates the ECR repos (empty). The script breaks
+the deadlock with a dependency-ordered, idempotent 4-step sequence:
+
+```
+1. cdk deploy --all  --context computeEnabled=false  → all infra + ECR repos, NO Lambdas
+2. build + push all 4 images to THIS env's repos     → Lambda images use buildx
+     docker-container driver, --provenance=false, oci-mediatypes=false (Docker-29
+     OCI index + provenance is rejected by Lambda); ECS images use the same path
+3. cdk deploy --all  (computeEnabled defaults true)  → adds Lambdas, images now present
+4. python scripts/seed_rules_catalog.py --env <env>  → loads 20 rules into rules-catalog-<env>
+```
+
+**rules-catalog seeding is NOT optional.** The rules engine `scan`s the
+rules-catalog table for `enabled=true` rules. A fresh table is EMPTY → the custom
+S3-/SG-/IAM-/ENC-/LOG- layer finds nothing and only Checkov fires. Step 4 fixes this.
+Any new bootstrap-time data (future seed sets) goes into this same script.
+
+**Promotion dev→staging→prod** runs the SAME script with a different env arg, so
+promotion is reliable by construction — the sequence and dependency order are
+identical in every environment. CDK's stack dependency graph
+(`addDependency(foundation)`) guarantees Foundation→Auth→Scanner order within each
+`cdk deploy --all`. The GitHub Actions deploy workflows (02/03) MUST invoke this
+script (or replicate its 4 steps) rather than a bare `cdk deploy`, or the first
+staging deploy will hit the deadlock. (Update those workflows before the first
+real staging promotion — tracked in Phase 2 deferred VERIFY items.)
+
+### TEARDOWN — one command, guaranteed clean, $0 after
+
+```
+# 1. Ensure NO scan is mid-flight (running Fargate ENIs lock the VPC → delete hangs):
+AWS_PROFILE=aws-admin aws ecs list-tasks --cluster guardrail-cluster-<env> --desired-status RUNNING
+# 2. Destroy everything (reverse-ordered automatically by CDK):
+AWS_PROFILE=aws-admin npx cdk destroy --all --context env=<env> --force
+# 3. One-time orphan sweep (pre-CDK leftovers only — normally nothing):
+#    delete any ECR repo not suffixed -<env> that predates the per-service design.
+```
+
+**Per-resource teardown handling (all verified):**
+
+| Resource | How it deletes cleanly |
+|---|---|
+| S3 buckets (×5) | `autoDeleteObjects:true` — CDK Lambda empties non-empty buckets first |
+| ECR repos (×4) | `emptyOnDelete:true` — images removed before repo delete |
+| DynamoDB (×4) | `RemovalPolicy.DESTROY` |
+| VPC / Fargate ENIs | `natGateways:0`; ENIs free when tasks stop — destroy only when idle |
+| VPC default-SG CR | `restrictDefaultSecurityGroup:false` — the flaky CDK custom resource is DISABLED (it previously caused a DELETE_FAILED) |
+| Lambda / ECS / SQS / SNS / EventBridge / Cognito / IAM / SSM / log groups | `RemovalPolicy.DESTROY`; delete cleanly with the stack |
+| KMS key | `DESTROY` → enters 7-day PendingDeletion. **NOT billed**, alias freed, auto-deletes. The only thing that lingers — and it costs $0. |
+
+**Teardown rules (enforced):**
+- Every S3 bucket: `autoDeleteObjects:true`. Every ECR repo: `emptyOnDelete:true`.
+- Every resource: `RemovalPolicy.DESTROY` (this is a demo — no RETAIN anywhere).
+- Any new VPC: `restrictDefaultSecurityGroup:false` + `natGateways:0`.
+- NEVER destroy a single lower stack alone (cross-stack exports block it) — always `--all`.
+- Stop running Fargate tasks (no active scan) BEFORE destroy, or the VPC delete hangs.
+- A KMS key in PendingDeletion is expected and free — do not treat it as a leftover.
+
+---
+
 ## AWS ACCOUNT SETUP REQUIREMENTS
 
 Before Phase 1 code can be deployed, verify these are done manually:
@@ -2016,6 +2094,10 @@ GITHUB ACTIONS — OIDC SETUP (Do Once, Replaces Stored AWS Keys)
 | No WebSocket in API layer | Removed from Phase 7 scope | Email is the async completion signal. User opens dashboard after receiving email — no real-time push needed. Removes websocket-handler Lambda, ws-connections DDB table, and API GW WebSocket API entirely. Simplifies both backend and frontend significantly. |
 | Static site: S3 + CloudFront | Not bare S3 static website endpoint | S3 website endpoints are HTTP-only; Cognito callback URLs require HTTPS. CloudFront provides HTTPS, caching, OAC for private bucket access, and SPA routing (404 → index.html). The "static website on S3" intent is met — CloudFront is the delivery layer, not a separate hosted service. |
 | Frontend: 2 pages only | ScanListPage + ScanDetailPage (no trend chart page) | The question asks for a Risk Score dashboard to show results. A scan list + detail view directly answers that. Trend charts are nice-to-have but out of scope for the MVP demo. |
+| `scripts/deploy_env.sh` is the ONLY setup/promotion path | Not bare `cdk deploy --all` | A bare `cdk deploy --all` fails on a fresh env (ECR bootstrap deadlock: Lambda fromEcr needs an image the just-created repo doesn't have). The script sequences deploy(computeEnabled=false) → push 4 images → deploy(computeEnabled=true) → seed rules-catalog. Idempotent, identical across dev/staging/prod, so promotion is reliable by construction. See ENVIRONMENT LIFECYCLE section. |
+| rules-catalog seeding is part of bootstrap | `scripts/seed_rules_catalog.py` runs as step 4 | rules_engine scans the rules-catalog table for enabled rules; a fresh table is empty → custom rules find nothing, only Checkov fires. Proven 2026-06-28: rebuilt-from-empty env scanned 48 findings incl. 9 custom only AFTER seeding. Seeding is non-optional and lives in the bootstrap script. |
+| `restrictDefaultSecurityGroup: false` on the VPC | Disable CDK's default-SG custom resource | That CR-backed Lambda intermittently fails on stack DELETE (DELETE_FAILED) once its provider is gone — it actually wedged our Phase A deploy. We don't use the default SG, so disabling the CR removes a teardown-blocker. Required on every VPC in this project. |
+| Teardown is a single `cdk destroy --all` to $0 | Tested full destroy → empty → rebuild on 2026-06-28 | Every resource is DESTROY + autoDeleteObjects (S3) + emptyOnDelete (ECR); destroy when idle (no running Fargate ENIs). Only a KMS key lingers in 7-day PendingDeletion at $0. See ENVIRONMENT LIFECYCLE section for the per-resource table and the must-stop-tasks-first rule. |
 
 ---
 
