@@ -7,6 +7,9 @@ import boto3
 import pytest
 from moto import mock_aws
 
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 os.environ.setdefault("SCAN_JOBS_TABLE", "scan-jobs-test")
 os.environ.setdefault("FINDINGS_TABLE", "findings-test")
 os.environ.setdefault("EVENT_BUS_NAME", "default")
