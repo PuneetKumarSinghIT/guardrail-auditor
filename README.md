@@ -301,6 +301,50 @@ python scripts/billing_check.py           # current month spend, grouped by serv
 
 ---
 
+## Tear down / deprovision
+
+When the demo is over, you have **two options** depending on whether you'll need it
+again:
+
+| Goal | Use | Effect |
+|---|---|---|
+| **Pause** between demos, bring it back later | `python scripts/demo_sleep.py --env dev` | Minimises idle cost; resources stay (re-wake with `demo_wake.py`). |
+| **Fully remove** everything (end of engagement) | `cdk destroy --all` (below) | Deletes every AWS resource → **$0, empty account**. |
+
+### Full deprovision — one command, $0 after
+
+The whole project is engineered to tear down cleanly: every resource uses
+`RemovalPolicy.DESTROY`, every S3 bucket `autoDeleteObjects`, and every ECR repo
+`emptyOnDelete`, so a single command removes everything with **no manual cleanup**.
+
+```bash
+# 1. (Important) Make sure no scan is mid-flight — a running Fargate task holds an
+#    ENI that blocks the VPC delete. Confirm there are none RUNNING:
+AWS_PROFILE=<your-profile> aws ecs list-tasks \
+  --cluster guardrail-cluster-dev --desired-status RUNNING
+
+# 2. Destroy the entire environment (CDK reverse-orders the stacks automatically):
+AWS_PROFILE=<your-profile> npx --prefix infrastructure cdk destroy --all \
+  --context env=dev --force
+#    (run from the infrastructure/ directory, or use the --prefix shown above)
+
+# 3. (Optional) Confirm the account is empty / cost has flatlined:
+AWS_PROFILE=<your-profile> python scripts/billing_check.py
+```
+
+**What's left afterwards:** nothing billable. The only lingering item is the project
+**KMS key**, which AWS forces into a **7-day pending-deletion** window (it's disabled
+immediately, costs **$0**, frees its alias, and auto-deletes — this is an AWS-enforced
+minimum you cannot bypass). Everything else — Lambda, ECS, S3, DynamoDB, ECR, API
+Gateway, Cognito, SNS, EventBridge, SSM, log groups — is gone immediately.
+
+> **Other environments:** swap `dev` for `staging` / `prod` in the `--context env=`
+> and the cluster name (`guardrail-cluster-<env>`) to tear those down the same way.
+> **One-time orphan note:** if you ever deployed pre-CDK resources by hand, delete any
+> ECR repo *not* suffixed with the env name — CDK only manages what it created.
+
+---
+
 ## Cost
 
 Built serverless-first specifically so it costs almost nothing when nobody is
