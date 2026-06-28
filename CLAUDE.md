@@ -1061,34 +1061,83 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- CLAUDE.md TOKEN EFFICIENCY PROTOCOL completely rewritten (2026-06-28):
-  - Haiku retired from Claude Code workflow — Sonnet 4.6 now handles ALL tasks inline
-  - Root cause: Haiku errors + retries cost more tokens than Sonnet one-shot execution
-  - ECR image missing bug documented in WHAT DEGRADES PERFORMANCE section
-  - prompts.md format updated (removed "Haiku agents" reference)
-  - KNOWN DECISIONS table updated with Sonnet 4.6 decision rationale
-  - COST GUARDRAILS clarified: Bedrock app engine keeps Haiku for explain_risk (different context)
-- Phase 5 code already complete (PR #9 open → dev). ECR image NOT yet pushed to ECR.
+- CLAUDE.md Docker Image Standards completely rewritten — python:3.12-slim + awslambdaric locked as standard
+- KNOWN DECISIONS: 5 new entries (per-service ECR, python:3.12-slim, awslambdaric, absolute imports, ECS env-var pattern)
+- WHAT DEGRADES PERFORMANCE: 6 new anti-patterns documented (AWS Lambda base image, relative imports, ZIP packaging, etc.)
+- **Architecture change: one ECR repo per service** (loosely coupled, independently deployable):
+  - scanner/ingest/Dockerfile + requirements.txt → guardrail-ingest-dev
+  - scanner/aggregator/Dockerfile + requirements.txt → guardrail-aggregator-dev
+  - scanner/rules_engine/Dockerfile + requirements.txt → guardrail-rules-engine-dev
+  - fargate/Dockerfile → guardrail-checkov-dev (unchanged)
+- scanner-stack.ts rewritten: 4 ECR repos, each Lambda/ECS uses its own repo, ECR URIs in SSM
+- scanner/src/main.py added (ECS dispatcher), rules_engine.py fixed (absolute imports + main())
+- CDK synth: 0 errors. git push → commit 9d290bf on feature/phase-5-scanning-engine
+- prompts.md: all session turns logged (MODE A entries)
 
 ### NEXT SESSION MUST START HERE
-**Phase 5 — Fix ECR image + re-verify acceptance criteria**
+**Phase 5 — Complete ECR deploy + verify acceptance criteria, then start Phase 6**
 
-  BLOCKER: ECS Fargate task fails because no Docker image exists in ECR.
-  Fix sequence:
-  1. Get AWS account ID: `aws sts get-caller-identity --query Account --output text`
-  2. Build + push Docker image manually:
-     ```
-     aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account}.dkr.ecr.us-east-1.amazonaws.com
-     docker build -t guardrail-scanner fargate/
-     docker tag guardrail-scanner:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
-     docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
-     ```
-  3. Confirm PR #9 CI checks pass (pytest + cfn-lint + tfsec + checkov)
-  4. After PR merges: `aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{account}-dev/test.tf`
-  5. Poll: `aws dynamodb scan --table-name scan-jobs-dev` → status becomes COMPLETE
-  6. Check: `aws dynamodb query --table-name findings-dev --key-condition "scan_job_id=..."` → ≥5 items
-  7. Verify ≥1 finding has severity=CRITICAL
-  8. If all pass: mark Phase 5 VERIFY as [x] → proceed to Phase 6
+STEP 1 — Re-authenticate AWS (session expired):
+  ```
+  aws sts get-caller-identity   # verify auth works before proceeding
+  ```
+
+STEP 2 — Deploy scanner stack (creates all 4 ECR repos in AWS):
+  ```
+  cd infrastructure
+  npx cdk deploy GuardrailScanner-dev --context env=dev --require-approval never
+  ```
+
+STEP 3 — Build and push all 4 service images:
+  ```
+  ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+  ECR=${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com
+  aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
+
+  docker build -f scanner/ingest/Dockerfile -t guardrail-ingest scanner/
+  docker tag guardrail-ingest:latest $ECR/guardrail-ingest-dev:dev-latest
+  docker push $ECR/guardrail-ingest-dev:dev-latest
+
+  docker build -f scanner/aggregator/Dockerfile -t guardrail-aggregator scanner/
+  docker tag guardrail-aggregator:latest $ECR/guardrail-aggregator-dev:dev-latest
+  docker push $ECR/guardrail-aggregator-dev:dev-latest
+
+  docker build -f scanner/rules_engine/Dockerfile -t guardrail-rules-engine scanner/
+  docker tag guardrail-rules-engine:latest $ECR/guardrail-rules-engine-dev:dev-latest
+  docker push $ECR/guardrail-rules-engine-dev:dev-latest
+
+  docker build -t guardrail-checkov fargate/
+  docker tag guardrail-checkov:latest $ECR/guardrail-checkov-dev:dev-latest
+  docker push $ECR/guardrail-checkov-dev:dev-latest
+  ```
+
+STEP 4 — Verify Phase 5 acceptance criteria:
+  ```
+  aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{ACCOUNT}-dev/test.tf
+  # Wait ~2 minutes then:
+  aws dynamodb scan --table-name scan-jobs-dev
+  # Look for status=COMPLETE, then get scan_job_id and:
+  aws dynamodb query --table-name findings-dev \
+    --key-condition-expression "scan_job_id = :id" \
+    --expression-attribute-values '{":id":{"S":"<scan_job_id>"}}'
+  # Verify: ≥5 findings, ≥1 has severity=CRITICAL
+  ```
+
+STEP 5 — If all pass: mark Phase 5 VERIFY [x] → start Phase 6 (AI Analysis Engine)
+
+### Session Log (reverse chronological)
+```
+2026-06-28 | Per-service ECR architecture implemented. One Dockerfile + ECR repo per
+             Lambda/ECS task. scanner-stack.ts has 4 ECR repos. CDK synth clean.
+             Pushed to feature/phase-5-scanning-engine (commit 9d290bf).
+             AWS session expired — cdk deploy + docker push pending re-auth.
+             CLAUDE.md: Docker standards + KNOWN DECISIONS + WHAT DEGRADES PERFORMANCE
+             all updated. prompts.md: all turns logged (MODE A).
+
+2026-06-28 | TOKEN EFFICIENCY PROTOCOL rewritten. Haiku retired from Claude Code workflow.
+             Sonnet 4.6 now handles ALL tasks inline — no subagents for routine work.
+             ECR image push blocker documented. Phase 5 VERIFY pending ECR fix.
+             CLAUDE.md: KNOWN DECISIONS + COST GUARDRAILS + SESSION TRACKER updated.
 
 ### Session Log (reverse chronological)
 ```
