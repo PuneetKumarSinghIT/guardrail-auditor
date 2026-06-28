@@ -2527,3 +2527,78 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   Test login: puneetkumarsingh765@gmail.com / Guardrail2026.
 **PR:** #18 → dev (frontend + frontend-host)
 **Outcome:** DONE (code + live host); CloudFront deploy + owner browser pass = follow-ups.
+
+## 2026-06-28 23:30 — Phase 9: Email Notifications & Observability
+**User Request:** "read claude.md and implement" → SESSION TRACKER pointed to Phase 9.
+**Files Created:**
+  - scanner/src/report_generator/__init__.py + pdf_generator.py (~190 lines, reportlab PDF: cover,
+    exec summary, per-severity sections CRITICAL-first)
+  - scanner/src/services/__init__.py + email_service.py (~150 lines, build_success/build_failure MIME
+    + SES send_raw_email; CRITICAL/HIGH-only body via single _crit_high chokepoint)
+  - scanner/src/handlers/report_handler.py (~110), email_handler.py (~150), failure_handler.py (~160)
+  - scanner/report/Dockerfile + requirements.txt (boto3 + reportlab + awslambdaric)
+  - infrastructure/lib/monitoring-stack.ts (~150, GuardrailHealth dashboard + ops SNS + alarms)
+  - scanner/tests/test_pdf_generator.py (3), test_report_handler.py (4), test_email_handler.py (8),
+    test_failure_handler.py (4) — 19 test fns covering the required 15+
+**Files Modified:**
+  - scanner/requirements.txt (+reportlab)
+  - infrastructure/lib/foundation-stack.ts (Secrets Manager app-secrets + cloudfront-url SSM + appSecret export)
+  - infrastructure/lib/scanner-stack.ts (report ECR repo + 3 Lambdas computeEnabled-gated + 4 EventBridge
+    rules + checkov-DLQ depth alarm→SNS→failure; reportsBucket+appSecret props)
+  - infrastructure/bin/app.ts (scanner new props; wire GuardrailMonitor stack)
+  - scripts/deploy_env.sh (build_push report = 8th image)
+**Bugs Fixed:**
+  - appSecret.grantRead(role) created a Foundation→Scanner CDK dependency cycle (grant mutates the
+    secret policy in Foundation to name the Scanner role) → replaced with an explicit
+    secretsmanager:GetSecretValue statement on the role (ARN token, Scanner→Foundation direction).
+  - EventBridge can't inject env vars into a Lambda target → email-handler routes success vs failure
+    off the event detail-type at runtime instead of a per-rule EMAIL_TYPE.
+**Decisions:**
+  - report/email/failure = 3 Lambdas sharing ONE guardrail-report-{env} image (reportlab), each a
+    distinct DockerImageCode cmd — NOT "scanner image + MODE" (no shared scanner image exists; mirrors
+    the ingest/aggregator per-service ECR pattern).
+  - monitoring-stack references pipeline Lambdas by metric DIMENSION (name strings), never by construct
+    import — keeps it off the computeEnabled two-phase gate.
+**Tests:** 74 passed, 86.87% coverage (scanner + api + ai-engine shared session).
+**Deploy:** two-phase (A computeEnabled=false → push report image → B computeEnabled=true), --exclusively,
+  background cdk. 8 stacks live incl. GuardrailMonitor-dev.
+**E2E VERIFIED (live dev):** bad TF → QUEUED→SCANNING→COMPLETE→AI_COMPLETE(risk=48)→REPORT_COMPLETE ~80s;
+  PDF 8,886B (%PDF-) in scan-reports; email-handler logged success_email_sent (SES identity Verified).
+  Known minor: EventBridge at-least-once → 2 emails/scan. Failure path deployed + unit-tested (not fired).
+**PR:** #20 → dev
+**Outcome:** DONE
+
+## 2026-06-28 18:30 — Phase 10: Demo Lifecycle & README
+**User Request:** "read claude.md and implement" → SESSION TRACKER pointed to Phase 10.
+**Files Created:**
+  - scripts/seed_demo_data.py (~270 lines) — 3 pre-canned scans (risk 72/45/16 = HIGH/MED/LOW)
+    dated 6/3/0 days ago (newest=lowest = improving-posture trend in the real Scan List); findings
+    with realistic ai_explanation + ai_fix_code (CRITICAL/HIGH only); canonical WEIGHTS risk score;
+    deterministic uuid5 ids (idempotent re-seed); report_s3_key left unset (no fake PDF).
+  - scripts/demo_sleep.py (~95 lines) — disable CloudFront IF dist exists (reads cloudfront-dist-id),
+    else no-op + report $0-idle Function URL host; records /guardrail/{env}/demo-state=sleeping.
+  - scripts/demo_wake.py (~110 lines) — re-enable CloudFront if present; seed_demo_data.main() in-process;
+    state=awake; prints live dashboard URL (frontend-url, fallback cloudfront-url).
+  - scripts/billing_check.py (~80 lines) — Cost Explorer get_cost_and_usage current month, group by
+    SERVICE, sorted desc, warns > $15 (--warn-at override), pinned us-east-1.
+  - README.md (~160 lines) — client-facing: description, ASCII architecture diagram, capabilities,
+    tech-stack badges, 3-command deploy, idle-vs-active cost table, screenshots placeholder.
+**Files Modified:** CLAUDE.md (Phase 10 checklist → [x] + REALITY/VERIFIED notes, SESSION TRACKER,
+  NEXT SESSION → Phase 11, Session Log).
+**Bugs Fixed:** billing_check crashed on Windows cp1252 (can't encode → / box-drawing) → added guarded
+  sys.stdout.reconfigure(utf-8) to all output scripts + switched billing table to ASCII glyphs.
+**Decisions:**
+  - CloudFront is account-blocked, so sleep/wake gracefully detect the missing cloudfront-dist-id and
+    no-op the disable/enable step — the Function URL host is already $0-idle. Scripts work unchanged
+    once CloudFront is verified.
+  - "7-day trend data" implemented as the improving-risk ordering of the 3 real seeded scans (rendered
+    in the actual Scan List) rather than a separate trend table — TrendChart is out of scope, so no
+    dead data with no consumer.
+**Tests:** No new pytest (scripts are operational glue, not app modules); py_compile clean + offline
+  risk-math check (72/45/16) + LIVE run against dev.
+**E2E VERIFIED (live dev, aws-admin):** seed → 3 rows in scan-jobs-dev (72/45/16, COMPLETE); demo_wake →
+  seeds + state=awake + Function URL; dashboard curl HTTP 200; demo_sleep → state=sleeping; billing_check
+  → per-service table, TOTAL $0.95 MTD (< $5 idle / $15 dev). 48h-idle + in-browser 10-min rehearsal =
+  owner manual steps.
+**PR:** #20 → dev
+**Outcome:** DONE

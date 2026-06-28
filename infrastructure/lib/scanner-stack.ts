@@ -12,6 +12,11 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 
 interface ScannerStackProps extends cdk.StackProps {
@@ -19,8 +24,10 @@ interface ScannerStackProps extends cdk.StackProps {
   findingsTable: dynamodb.Table;
   rulesCatalogTable: dynamodb.Table;
   uploadBucket: s3.Bucket;
+  reportsBucket: s3.Bucket;
   kmsKey: cdk.aws_kms.Key;
   eventBus: events.EventBus;
+  appSecret: secretsmanager.Secret;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,6 +53,11 @@ export class ScannerStack extends cdk.Stack {
   public readonly aggregatorEcrRepo: ecr.Repository;
   public readonly rulesEngineEcrRepo: ecr.Repository;
   public readonly checkovEcrRepo: ecr.Repository;
+  // Phase 9: report/email/failure Lambdas share ONE image (carries reportlab).
+  public readonly reportEcrRepo: ecr.Repository;
+  public readonly reportHandlerFn?: lambda.DockerImageFunction;
+  public readonly emailHandlerFn?: lambda.DockerImageFunction;
+  public readonly failureHandlerFn?: lambda.DockerImageFunction;
 
   constructor(scope: Construct, id: string, props: ScannerStackProps) {
     super(scope, id, props);
@@ -123,6 +135,15 @@ export class ScannerStack extends cdk.Stack {
       ...ecrDefaults,
     });
 
+    // ── ECR: report/email/failure Lambdas (Phase 9) ──────────────────────────
+    // ONE image (boto3 + reportlab + awslambdaric) shared by all three Lambdas;
+    // each Lambda points its DockerImageCode cmd at its own handler.
+    // Dockerfile: scanner/report/Dockerfile (build context: scanner/)
+    this.reportEcrRepo = new ecr.Repository(this, "ReportRepo", {
+      repositoryName: `guardrail-report-${env}`,
+      ...ecrDefaults,
+    });
+
     // ── SSM: ECR URIs for CI/CD pipelines ───────────────────────────────────
     new ssm.StringParameter(this, "IngestEcrUriParam", {
       parameterName: `/guardrail/${env}/ecr-ingest-uri`,
@@ -139,6 +160,10 @@ export class ScannerStack extends cdk.Stack {
     new ssm.StringParameter(this, "CheckovEcrUriParam", {
       parameterName: `/guardrail/${env}/ecr-checkov-uri`,
       stringValue: this.checkovEcrRepo.repositoryUri,
+    });
+    new ssm.StringParameter(this, "ReportEcrUriParam", {
+      parameterName: `/guardrail/${env}/ecr-report-uri`,
+      stringValue: this.reportEcrRepo.repositoryUri,
     });
 
     // ── Dead-letter queue ────────────────────────────────────────────────────
@@ -488,6 +513,192 @@ export class ScannerStack extends cdk.Stack {
         ],
       })
     );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PHASE 9 — Reporting + Notifications (report / email / failure Lambdas)
+    // All three share the guardrail-report image; gated by computeEnabled like
+    // the other fromEcr Lambdas (image must exist at CreateFunction time).
+    // ─────────────────────────────────────────────────────────────────────────
+    if (computeEnabled) {
+      const cloudFrontUrl = ssm.StringParameter.valueForStringParameter(
+        this,
+        `/guardrail/${env}/cloudfront-url`
+      );
+
+      // Dedicated role — these Lambdas need SES + Secrets, which the scanner
+      // ingest/aggregator role deliberately does not have (least privilege).
+      const reportingRole = new iam.Role(this, "ReportingLambdaRole", {
+        roleName: `guardrail-reporting-lambda-role-${env}`,
+        assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+        managedPolicies: [
+          iam.ManagedPolicy.fromAwsManagedPolicyName(
+            "service-role/AWSLambdaBasicExecutionRole"
+          ),
+        ],
+      });
+      props.kmsKey.grantEncryptDecrypt(reportingRole);
+      props.scanJobsTable.grantReadWriteData(reportingRole);
+      props.findingsTable.grantReadData(reportingRole);
+      props.reportsBucket.grantReadWrite(reportingRole);
+      props.eventBus.grantPutEventsTo(reportingRole);
+      // Grant GetSecretValue on the role itself (referencing the Foundation ARN
+      // token) rather than appSecret.grantRead() — the latter mutates the
+      // secret's policy in Foundation to name this Scanner role, creating a
+      // Foundation→Scanner edge and a dependency cycle. KMS decrypt for the
+      // secret is already covered by grantEncryptDecrypt(reportingRole) above.
+      reportingRole.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["secretsmanager:GetSecretValue"],
+          resources: [props.appSecret.secretArn],
+        })
+      );
+      this.reportEcrRepo.grantPull(reportingRole);
+      reportingRole.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["xray:PutTraceSegments", "xray:PutTelemetryRecords"],
+          resources: ["*"],
+        })
+      );
+      // SES scoped to the single verified demo identity (sandbox: From=To).
+      reportingRole.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["ses:SendRawEmail"],
+          resources: [
+            `arn:aws:ses:${this.region}:${this.account}:identity/puneetkumarsingh765@gmail.com`,
+          ],
+        })
+      );
+
+      const reportingEnv: Record<string, string> = {
+        SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
+        FINDINGS_TABLE: props.findingsTable.tableName,
+        REPORTS_BUCKET: props.reportsBucket.bucketName,
+        EVENT_BUS_NAME: props.eventBus.eventBusName,
+        CLOUDFRONT_URL: cloudFrontUrl,
+        APP_SECRETS_ARN: props.appSecret.secretArn,
+        ENVIRONMENT: env,
+        LOG_LEVEL: "INFO",
+      };
+
+      const reportImage = (cmd: string) =>
+        lambda.DockerImageCode.fromEcr(this.reportEcrRepo, {
+          tagOrDigest: `${env}-latest`,
+          entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
+          cmd: [cmd],
+        });
+
+      // ── report-handler: AIAnalysisComplete → PDF in S3 → ReportGenerated ────
+      this.reportHandlerFn = new lambda.DockerImageFunction(this, "ReportHandler", {
+        functionName: `guardrail-report-handler-${env}`,
+        code: reportImage("src.handlers.report_handler.handler"),
+        memorySize: 512,
+        timeout: cdk.Duration.seconds(120),
+        role: reportingRole,
+        environment: reportingEnv,
+        tracing: lambda.Tracing.ACTIVE,
+        logGroup: new logs.LogGroup(this, "ReportHandlerLogs", {
+          logGroupName: `/guardrail/${env}/lambda/report-handler`,
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy,
+        }),
+      });
+
+      // ── email-handler: ReportGenerated (success) OR ScanFailed (failure) ────
+      this.emailHandlerFn = new lambda.DockerImageFunction(this, "EmailHandler", {
+        functionName: `guardrail-email-handler-${env}`,
+        code: reportImage("src.handlers.email_handler.handler"),
+        memorySize: 256,
+        timeout: cdk.Duration.seconds(30),
+        role: reportingRole,
+        environment: reportingEnv,
+        tracing: lambda.Tracing.ACTIVE,
+        logGroup: new logs.LogGroup(this, "EmailHandlerLogs", {
+          logGroupName: `/guardrail/${env}/lambda/email-handler`,
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy,
+        }),
+      });
+
+      // ── failure-handler: ECS exit≠0 OR DLQ alarm → FAILED → ScanFailed ──────
+      this.failureHandlerFn = new lambda.DockerImageFunction(this, "FailureHandler", {
+        functionName: `guardrail-failure-handler-${env}`,
+        code: reportImage("src.handlers.failure_handler.handler"),
+        memorySize: 128,
+        timeout: cdk.Duration.seconds(30),
+        role: reportingRole,
+        environment: reportingEnv,
+        tracing: lambda.Tracing.ACTIVE,
+        logGroup: new logs.LogGroup(this, "FailureHandlerLogs", {
+          logGroupName: `/guardrail/${env}/lambda/failure-handler`,
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy,
+        }),
+      });
+
+      // ── EventBridge rules (custom guardrail bus) ────────────────────────────
+      new events.Rule(this, "AiAnalysisCompleteRule", {
+        ruleName: `guardrail-ai-analysis-complete-${env}`,
+        eventBus: props.eventBus,
+        eventPattern: { source: ["guardrail"], detailType: ["AIAnalysisComplete"] },
+        targets: [new targets.LambdaFunction(this.reportHandlerFn)],
+      });
+
+      new events.Rule(this, "ReportGeneratedRule", {
+        ruleName: `guardrail-report-generated-${env}`,
+        eventBus: props.eventBus,
+        eventPattern: { source: ["guardrail"], detailType: ["ReportGenerated"] },
+        targets: [new targets.LambdaFunction(this.emailHandlerFn)],
+      });
+
+      new events.Rule(this, "ScanFailedRule", {
+        ruleName: `guardrail-scan-failed-${env}`,
+        eventBus: props.eventBus,
+        eventPattern: { source: ["guardrail"], detailType: ["ScanFailed"] },
+        targets: [new targets.LambdaFunction(this.emailHandlerFn)],
+      });
+
+      // ECS TaskStopped with a non-zero container exit → failure-handler.
+      // Default bus (aws.ecs), scoped to OUR cluster so other tasks don't trip it.
+      new events.Rule(this, "EcsTaskFailedRule", {
+        ruleName: `guardrail-ecs-task-failed-${env}`,
+        eventPattern: {
+          source: ["aws.ecs"],
+          detailType: ["ECS Task State Change"],
+          detail: {
+            clusterArn: [cluster.clusterArn],
+            lastStatus: ["STOPPED"],
+            containers: { exitCode: [{ "anything-but": 0 }] },
+          },
+        },
+        targets: [new targets.LambdaFunction(this.failureHandlerFn)],
+      });
+
+      // ── DLQ depth alarm → SNS → failure-handler ─────────────────────────────
+      const dlqTopic = new sns.Topic(this, "DlqAlertsTopic", {
+        topicName: `guardrail-dlq-alerts-${env}`,
+        masterKey: props.kmsKey,
+      });
+      dlqTopic.applyRemovalPolicy(removalPolicy);
+      dlqTopic.addSubscription(
+        new snsSubscriptions.LambdaSubscription(this.failureHandlerFn)
+      );
+
+      const dlqAlarm = new cloudwatch.Alarm(this, "CheckovDlqDepthAlarm", {
+        alarmName: `guardrail-checkov-dlq-depth-${env}`,
+        alarmDescription:
+          "Checkov results landed in the DLQ — a scan stage is failing.",
+        metric: checkovDlq.metricApproximateNumberOfMessagesVisible({
+          period: cdk.Duration.minutes(1),
+          statistic: "Maximum",
+        }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      dlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(dlqTopic));
+    }
 
     // ── Tags ──────────────────────────────────────────────────────────────────
     Object.entries(commonTags).forEach(([k, v]) => cdk.Tags.of(this).add(k, v));
