@@ -81,6 +81,26 @@ export class FoundationStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       eventBridgeEnabled: true,
+      // CORS: the dashboard uploads files by a cross-origin presigned PUT straight
+      // to S3 (XHR), so the browser fires a CORS preflight (OPTIONS) first — without
+      // this rule S3 returns NoSuchCORSConfiguration and the upload FAILS in the UI.
+      // AllowedOrigins '*' is safe here: the time-limited, single-key presigned URL
+      // is the real auth boundary, and '*' keeps uploads working regardless of which
+      // dashboard origin is in use (API Gateway / future CloudFront / local dev).
+      cors: [
+        {
+          allowedMethods: [
+            s3.HttpMethods.PUT,
+            s3.HttpMethods.POST,
+            s3.HttpMethods.GET,
+            s3.HttpMethods.HEAD,
+          ],
+          allowedOrigins: ['*'],
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+          maxAge: 3000,
+        },
+      ],
       lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
       removalPolicy,
       autoDeleteObjects: true,
