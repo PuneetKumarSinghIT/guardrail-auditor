@@ -50,6 +50,12 @@ export class ApiStack extends cdk.Stack {
     const removalPolicy = cdk.RemovalPolicy.DESTROY;
     const computeEnabled =
       this.node.tryGetContext("computeEnabled") !== "false";
+    // Phase 11: reserved concurrency is $0 but BLOCKED by this account's Lambda
+    // concurrency quota of 10 (unverified-account limit) — gated OFF by default,
+    // enable with `--context reservedConcurrency=true` once the account is
+    // verified. See CLAUDE.md Phase 11 note. api-handler target: 20.
+    const reservedConcurrency =
+      this.node.tryGetContext("reservedConcurrency") === "true";
     // CloudFront URL is only known in Phase 8 — until then "*" lets the local
     // Vite dev server call the API. Override via --context corsOrigin=https://...
     const corsOrigin = this.node.tryGetContext("corsOrigin") ?? "*";
@@ -121,6 +127,7 @@ export class ApiStack extends cdk.Stack {
         memorySize: 256,
         timeout: cdk.Duration.seconds(29),
         role: apiRole,
+        reservedConcurrentExecutions: reservedConcurrency ? 20 : undefined,
         environment: {
           SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
           FINDINGS_TABLE: props.findingsTable.tableName,
@@ -147,8 +154,9 @@ export class ApiStack extends cdk.Stack {
         deployOptions: {
           stageName: env,
           tracingEnabled: true,
-          throttlingBurstLimit: 200,
-          throttlingRateLimit: 100,
+          // Phase 11: stage-level throttling (free) — 500 req/s steady, 1000 burst.
+          throttlingBurstLimit: 1000,
+          throttlingRateLimit: 500,
         },
         defaultCorsPreflightOptions: {
           allowOrigins:

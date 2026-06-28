@@ -78,6 +78,21 @@ export class ScannerStack extends cdk.Stack {
     const computeEnabled =
       this.node.tryGetContext("computeEnabled") !== "false";
 
+    // ── Phase 11: Lambda reserved concurrency (cost-free, but quota-gated) ────
+    // Reserved concurrency itself is $0, but it is BLOCKED on this account: the
+    // AWS-imposed Lambda concurrency limit here is 10 (the reduced quota given to
+    // unverified accounts — same root cause as the CloudFront/Bedrock blockers).
+    // AWS keeps a minimum unreserved floor equal to that limit, so ANY reservation
+    // would push unreserved below the floor and FAIL the deploy. We therefore write
+    // the construct but gate it OFF by default; once the account is verified (limit
+    // back to 1000) deploy with `--context reservedConcurrency=true`. See CLAUDE.md
+    // Phase 11 note. Numbers per CLAUDE.md: ingest 10, aggregator 10, report/email/
+    // failure 5 each.
+    const reservedConcurrency =
+      this.node.tryGetContext("reservedConcurrency") === "true";
+    const rc = (n: number): number | undefined =>
+      reservedConcurrency ? n : undefined;
+
     const commonTags = {
       Project: "SecurityGuardrailAuditor",
       Environment: env,
@@ -246,6 +261,7 @@ export class ScannerStack extends cdk.Stack {
           memorySize: 256,
           timeout: cdk.Duration.seconds(30),
           role: lambdaRole,
+          reservedConcurrentExecutions: rc(10),
           environment: commonLambdaEnv,
           tracing: lambda.Tracing.ACTIVE,
           logGroup: new logs.LogGroup(this, "IngestHandlerLogs", {
@@ -269,6 +285,7 @@ export class ScannerStack extends cdk.Stack {
         memorySize: 256,
         timeout: cdk.Duration.seconds(60),
         role: lambdaRole,
+        reservedConcurrentExecutions: rc(10),
         environment: commonLambdaEnv,
         tracing: lambda.Tracing.ACTIVE,
         logGroup: new logs.LogGroup(this, "AggregatorLogs", {
@@ -303,6 +320,19 @@ export class ScannerStack extends cdk.Stack {
           cidrMask: 24,
         },
       ],
+    });
+
+    // ── Phase 11: VPC Gateway endpoints (S3 + DynamoDB) — $0, no NAT ──────────
+    // Keeps Fargate task traffic to S3 (IaC downloads) and DynamoDB (findings
+    // writes) on the AWS backbone instead of egressing to the public internet.
+    // Gateway endpoints are FREE (no hourly charge, no data-processing fee),
+    // unlike INTERFACE endpoints for Bedrock/SSM/ECR (~$7.2/mo each) which are
+    // intentionally deferred on this demo — see CLAUDE.md Phase 11 cost note.
+    vpc.addGatewayEndpoint("S3GatewayEndpoint", {
+      service: ec2.GatewayVpcEndpointAwsService.S3,
+    });
+    vpc.addGatewayEndpoint("DynamoDbGatewayEndpoint", {
+      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
     });
 
     // ── ECS Cluster ──────────────────────────────────────────────────────────
@@ -594,6 +624,7 @@ export class ScannerStack extends cdk.Stack {
         memorySize: 512,
         timeout: cdk.Duration.seconds(120),
         role: reportingRole,
+        reservedConcurrentExecutions: rc(5),
         environment: reportingEnv,
         tracing: lambda.Tracing.ACTIVE,
         logGroup: new logs.LogGroup(this, "ReportHandlerLogs", {
@@ -610,6 +641,7 @@ export class ScannerStack extends cdk.Stack {
         memorySize: 256,
         timeout: cdk.Duration.seconds(30),
         role: reportingRole,
+        reservedConcurrentExecutions: rc(5),
         environment: reportingEnv,
         tracing: lambda.Tracing.ACTIVE,
         logGroup: new logs.LogGroup(this, "EmailHandlerLogs", {
@@ -626,6 +658,7 @@ export class ScannerStack extends cdk.Stack {
         memorySize: 128,
         timeout: cdk.Duration.seconds(30),
         role: reportingRole,
+        reservedConcurrentExecutions: rc(5),
         environment: reportingEnv,
         tracing: lambda.Tracing.ACTIVE,
         logGroup: new logs.LogGroup(this, "FailureHandlerLogs", {

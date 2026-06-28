@@ -42,6 +42,11 @@ export class AiStack extends cdk.Stack {
     const removalPolicy = cdk.RemovalPolicy.DESTROY;
     const computeEnabled =
       this.node.tryGetContext("computeEnabled") !== "false";
+    // Phase 11: reserved concurrency is $0 but BLOCKED by this account's Lambda
+    // concurrency quota of 10 (unverified-account limit) — gated OFF by default,
+    // enable with `--context reservedConcurrency=true` once verified. ai-analyzer: 5.
+    const reservedConcurrency =
+      this.node.tryGetContext("reservedConcurrency") === "true";
 
     const commonTags = {
       Project: "SecurityGuardrailAuditor",
@@ -152,6 +157,7 @@ export class AiStack extends cdk.Stack {
         memorySize: 512,
         timeout: cdk.Duration.seconds(300),
         role: analyzerRole,
+        reservedConcurrentExecutions: reservedConcurrency ? 5 : undefined,
         environment: {
           FINDINGS_TABLE: props.findingsTable.tableName,
           SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
