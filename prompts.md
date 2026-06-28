@@ -2567,3 +2567,38 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   Known minor: EventBridge at-least-once → 2 emails/scan. Failure path deployed + unit-tested (not fired).
 **PR:** (pending in this housekeeping turn) → dev
 **Outcome:** DONE
+
+## 2026-06-28 18:30 — Phase 10: Demo Lifecycle & README
+**User Request:** "read claude.md and implement" → SESSION TRACKER pointed to Phase 10.
+**Files Created:**
+  - scripts/seed_demo_data.py (~270 lines) — 3 pre-canned scans (risk 72/45/16 = HIGH/MED/LOW)
+    dated 6/3/0 days ago (newest=lowest = improving-posture trend in the real Scan List); findings
+    with realistic ai_explanation + ai_fix_code (CRITICAL/HIGH only); canonical WEIGHTS risk score;
+    deterministic uuid5 ids (idempotent re-seed); report_s3_key left unset (no fake PDF).
+  - scripts/demo_sleep.py (~95 lines) — disable CloudFront IF dist exists (reads cloudfront-dist-id),
+    else no-op + report $0-idle Function URL host; records /guardrail/{env}/demo-state=sleeping.
+  - scripts/demo_wake.py (~110 lines) — re-enable CloudFront if present; seed_demo_data.main() in-process;
+    state=awake; prints live dashboard URL (frontend-url, fallback cloudfront-url).
+  - scripts/billing_check.py (~80 lines) — Cost Explorer get_cost_and_usage current month, group by
+    SERVICE, sorted desc, warns > $15 (--warn-at override), pinned us-east-1.
+  - README.md (~160 lines) — client-facing: description, ASCII architecture diagram, capabilities,
+    tech-stack badges, 3-command deploy, idle-vs-active cost table, screenshots placeholder.
+**Files Modified:** CLAUDE.md (Phase 10 checklist → [x] + REALITY/VERIFIED notes, SESSION TRACKER,
+  NEXT SESSION → Phase 11, Session Log).
+**Bugs Fixed:** billing_check crashed on Windows cp1252 (can't encode → / box-drawing) → added guarded
+  sys.stdout.reconfigure(utf-8) to all output scripts + switched billing table to ASCII glyphs.
+**Decisions:**
+  - CloudFront is account-blocked, so sleep/wake gracefully detect the missing cloudfront-dist-id and
+    no-op the disable/enable step — the Function URL host is already $0-idle. Scripts work unchanged
+    once CloudFront is verified.
+  - "7-day trend data" implemented as the improving-risk ordering of the 3 real seeded scans (rendered
+    in the actual Scan List) rather than a separate trend table — TrendChart is out of scope, so no
+    dead data with no consumer.
+**Tests:** No new pytest (scripts are operational glue, not app modules); py_compile clean + offline
+  risk-math check (72/45/16) + LIVE run against dev.
+**E2E VERIFIED (live dev, aws-admin):** seed → 3 rows in scan-jobs-dev (72/45/16, COMPLETE); demo_wake →
+  seeds + state=awake + Function URL; dashboard curl HTTP 200; demo_sleep → state=sleeping; billing_check
+  → per-service table, TOTAL $0.95 MTD (< $5 idle / $15 dev). 48h-idle + in-browser 10-min rehearsal =
+  owner manual steps.
+**PR:** (pending in this housekeeping turn) → dev
+**Outcome:** DONE
