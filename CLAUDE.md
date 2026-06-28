@@ -684,33 +684,41 @@ START COMMANDS:
   mkdir -p api/src/routes api/src/middleware api/tests
 
   CODE:
-  [ ] api/src/middleware/auth.py:
+  [x] api/src/middleware/auth.py:
         Validates Cognito JWT using python-jose
         Raises 401 if token missing, expired, or wrong issuer
-  [ ] api/src/middleware/cors.py: CORS headers allowing CloudFront domain only
-  [ ] api/src/routes/scans.py:
+  [x] api/src/middleware/cors.py: CORS headers allowing CloudFront domain only
+  [x] api/src/routes/scans.py:
         POST /v1/scans: generate S3 presigned PUT URL (expires 5 min), create QUEUED DDB record
         GET  /v1/scans: list all scans (paginated, max 50, sorted created_at desc)
                         Returns: scan_job_id, file_name, status, risk_score, finding_counts, created_at
         GET  /v1/scans/{id}: full scan detail
                         Returns: all scan fields + findings[] with rule_id, severity, resource_name,
                                  line_number, ai_explanation, ai_fix_code
-  [ ] api/src/routes/reports.py:
+  [x] api/src/routes/reports.py:
         GET /v1/scans/{id}/report: generate presigned S3 GET URL for PDF (expires 15 min)
                                    404 if report not yet generated
-  [ ] api/requirements.txt: boto3, python-jose[cryptography]
+  [x] api/requirements.txt: boto3, python-jose[cryptography]
+        NOTE: api entrypoint is src/app.py (NOT main.py) — scanner already owns the
+        src.main module and all 3 services share one `src` namespace in pytest.
 
   INFRASTRUCTURE:
-  [ ] infrastructure/lib/api-stack.ts:
+  [x] infrastructure/lib/api-stack.ts:
         API Gateway REST API (regional, Cognito User Pool authorizer)
         Lambda: api-handler (guardrail-api ECR image, 256MB, 29s) — all routes in one function
         SSM: /guardrail/{env}/api-url
         No WebSocket API — removed from scope (email is the notification mechanism)
+        Same two-phase computeEnabled ECR gate as scanner/ai; deploy_env.sh builds the api image.
+        app.ts: api depends on foundation + auth ONLY (NOT scanner/ai — it imports no
+        export from them; adding those deps pulls them into `cdk deploy GuardrailApi` and
+        under computeEnabled=false would strip their live Lambdas).
 
   TESTS:
-  [ ] api/tests/test_scans.py: 5 tests (POST success, GET list, GET by id, GET report url, no-auth-401)
-  [ ] api/tests/test_middleware.py: 3 tests (valid JWT passes, expired JWT 401, missing JWT 401)
-  [ ] VERIFY: deploy to dev → Postman runs all 5 endpoints successfully
+  [x] api/tests/test_scans.py: 5 tests (POST success, GET list, GET by id, GET report url, no-auth-401)
+  [x] api/tests/test_middleware.py: 3 tests (valid JWT passes, expired JWT 401, missing JWT 401)
+  [x] VERIFY: deployed to dev + live-tested all 5 (2026-06-28): no-JWT→401; with Cognito JWT
+        POST→200 {presigned_url, scan_job_id}, GET list→200, GET detail→200, GET report→404
+        (no PDF until Phase 9). Full suite 55 passed, 85.86% cov.
 
 ═══════════════════════════════════════════════════════════════
 PHASE 8: Frontend Dashboard
@@ -1063,9 +1071,41 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 — PHASE 6 AI ENGINE ✅ WORKING E2E IN AWS (gpt-oss runtime-token bridge)**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 7 API LAYER ✅ DEPLOYED + LIVE-VERIFIED IN AWS**
 
-### What Was Completed This Session (Phase 6 + ops)
+### What Was Completed This Session (Phase 7)
+- **PHASE 7 API LAYER: DEPLOYED + LIVE-VERIFIED IN AWS.** `guardrail-api-dev` Lambda behind an
+  API Gateway REST API (https://ajdt217kkg.execute-api.us-east-1.amazonaws.com/dev/) with a
+  Cognito User Pool authorizer. Live-tested with a real Cognito JWT: no-JWT→401; POST /v1/scans→200
+  {presigned_url, scan_job_id}; GET /v1/scans→200 list; GET /v1/scans/{id}→200 detail; GET
+  /v1/scans/{id}/report→404 (no PDF until Phase 9). Full suite 55 passed, 85.86% cov. PR #17.
+- **New: api/** — src/app.py (dispatcher), routes/scans.py + routes/reports.py, middleware/auth.py
+  (python-jose Cognito JWT: JWKS/RS256/issuer/exp/token_use), middleware/cors.py (Decimal-safe JSON),
+  Dockerfile (python:3.12-slim + awslambdaric), requirements (+python-jose[cryptography]), 8 tests.
+  **Entrypoint is src/app.py, NOT main.py** — scanner already owns `src.main` and all 3 services
+  share ONE `src` namespace in the pytest session; a 2nd src/main.py would collide. (routes/ and
+  middleware/ have __init__.py; src/ does not — namespace pkg, same as scanner/ai-engine.)
+- **New: infrastructure/lib/api-stack.ts** — same two-phase computeEnabled ECR gate as scanner/ai.
+  Modified: app.ts (ApiStack wired, depends on foundation+auth ONLY), deploy_env.sh (6th image:
+  api), conftest.py (+api in the src path list), scanner/src/handlers/ingest_handler.py.
+- **SINGLE-RECORD ingest change:** the API embeds scan_job_id in the upload key (uploads/<uuid>/<file>);
+  ingest now reuses that UUID instead of minting a new one, so one job = one DDB row end-to-end.
+  Direct uploads without a UUID 2nd segment still mint a fresh id (existing ingest tests unchanged).
+- **⚠ INCIDENT + RECOVERY (lesson logged below):** a foreground `cdk deploy` (no --exclusively, with
+  computeEnabled=false) TIMED OUT at the 2-min tool limit but its node child KEPT RUNNING detached and
+  deployed the dependency stacks — STRIPPING the scanner + ai Lambdas (computeEnabled=false removes
+  them). Recovered fully: killed the rogue PID, deleted the half-made REVIEW_IN_PROGRESS api stack,
+  re-created the api ECR repo (compute=false), pushed the api image, then `cdk deploy --all`
+  (compute=true) restored ALL Lambdas (ingest/aggregator/ai-analyzer) + created api. Verified all 5
+  stacks UPDATE_COMPLETE + 4 Lambdas live.
+- **CDK auth gotcha (this tool shell):** the CDK CLI's node SDK did NOT pick up the aws-admin SSO
+  cache → "no credentials configured". FIX: `eval "$(aws configure export-credentials --profile
+  aws-admin --format env)"` + `export CDK_DEFAULT_ACCOUNT/REGION` in the SAME command (shell state
+  doesn't persist between Bash calls). `aws` CLI v2 commands work with just AWS_PROFILE=aws-admin.
+- **Git Bash gotcha:** a leading-slash arg like `/guardrail/dev/api-url` gets MSYS-mangled into
+  `C:/Program Files/Git/...` → false ParameterNotFound. FIX: prefix with `MSYS_NO_PATHCONV=1`.
+
+### What Was Completed (Prior session — Phase 6 + ops)
 - **PHASE 6 AI ANALYSIS ENGINE: WORKING END-TO-END IN AWS.** Fully automatic pipeline
   upload→scan→COMPLETE→ScanComplete→ai-analyzer→AI_COMPLETE (~75s); 13/13 findings explained,
   CRITICAL/HIGH fixed, risk_score set. 47 tests pass.
@@ -1103,12 +1143,22 @@ ACCEPTANCE CRITERIA:
 - NOT yet committed/merged at the time of writing → committing on feature/phase-6-ai-engine, PR to dev.
 
 ### NEXT SESSION MUST START HERE
-**Phase 6 is DONE (working E2E via gpt-oss). Start Phase 7 — API Layer.** Prefix every AWS/CDK
-command with `AWS_PROFILE=aws-admin`.
-  - Optional, when the AWS model-access case resolves: flip the ai-analyzer to Claude by setting
-    BEDROCK_PROVIDER=anthropic in ai-stack.ts (the anthropic path + IAM are already built/deployed),
-    redeploy GuardrailAi-dev. Confirm access first: `aws bedrock get-foundation-model-availability
-    --model-id anthropic.claude-haiku-4-5-20251001-v1:0` → authorizationStatus=AUTHORIZED.
+**Phase 7 is DONE (API deployed + live-verified). Start Phase 8 — Frontend Dashboard.**
+Auth recipe for AWS/CDK in THIS tool shell (both needed in the SAME Bash command):
+  - `aws` CLI v2:  prefix `AWS_PROFILE=aws-admin` (and `MSYS_NO_PATHCONV=1` for any /leading-slash arg).
+  - `cdk` deploy:  `eval "$(aws configure export-credentials --profile aws-admin --format env)"` then
+    `export CDK_DEFAULT_ACCOUNT=879072872327 CDK_DEFAULT_REGION=us-east-1` then the cdk command.
+  - ALWAYS pass `--exclusively` when deploying a single stack, and NEVER let a cdk deploy run in the
+    FOREGROUND past the 2-min tool timeout — use run_in_background:true (a timed-out cdk keeps
+    deploying detached and can strip Lambdas via computeEnabled). See the Phase 7 incident above.
+  - dev is DEPLOYED + RUNNING (all 5 stacks UPDATE_COMPLETE). API URL is in SSM
+    /guardrail/dev/api-url. Cognito pool/client ids in /guardrail/dev/cognito-*.
+Phase 8: frontend/ (Vite React+TS, 2 pages: ScanList + ScanDetail), frontend-stack.ts (S3 +
+  CloudFront OAC), 04-deploy-frontend.yml reads VITE_* from SSM /guardrail/dev/*. Set CORS_ORIGIN
+  on the api Lambda to the CloudFront URL once known (currently "*"); redeploy GuardrailApi-dev.
+  - Optional, when the AWS Bedrock model-access case resolves: flip ai-analyzer to Claude by setting
+    BEDROCK_PROVIDER=anthropic in ai-stack.ts, redeploy GuardrailAi-dev. Confirm first:
+    `aws bedrock get-foundation-model-availability --model-id anthropic.claude-haiku-4-5-20251001-v1:0`.
   - Phase 7: api/ (routes scans + reports), api-stack.ts (API GW + Cognito authorizer + api-handler
     Lambda, same fromEcr two-phase gate + deploy_env.sh build step as the other services).
 
@@ -1171,6 +1221,19 @@ STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | PHASE 7 API LAYER DEPLOYED + LIVE-VERIFIED (PR #17 → dev). api/ = one Lambda behind
+             API GW REST + Cognito authorizer; 4 routes (POST/GET scans, GET detail, GET report).
+             Entrypoint src/app.py (NOT main.py — avoids src.main collision with scanner in the
+             shared pytest namespace). middleware/auth.py = python-jose JWT (JWKS/RS256). Ingest
+             reuses the API-embedded scan_job_id (uploads/<uuid>/<file>) → one DDB row e2e.
+             api-stack.ts uses the two-phase computeEnabled ECR gate; app.ts deps = foundation+auth
+             only. 55 tests, 85.86% cov. Live: no-JWT→401, JWT POST→200, GET list/detail→200,
+             report→404. INCIDENT: a foreground `cdk deploy` (no --exclusively, computeEnabled=false)
+             timed out at the 2-min tool cap but its node child kept running detached and stripped
+             scanner+ai Lambdas; recovered via kill + `cdk deploy --all` compute=true. Lessons:
+             always --exclusively + run_in_background for cdk; export-credentials for cdk SSO;
+             MSYS_NO_PATHCONV=1 for /leading-slash aws args.
+
 2026-06-28 | ENV LIFECYCLE proven (PR #11 → dev). Teardown guarantee tested LIVE: cdk destroy --all
              → account 100% empty ($0, no DELETE_FAILED). VPC restrictDefaultSecurityGroup:false
              removes the flaky teardown-blocker. scripts/deploy_env.sh (4-step bootstrap) +
