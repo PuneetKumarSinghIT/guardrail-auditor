@@ -1063,7 +1063,7 @@ ACCEPTANCE CRITERIA:
 
 ## SESSION TRACKER
 
-**MOST RECENT SESSION: June 28, 2026 (afternoon) — PHASE 5 COMPLETE ✅**
+**MOST RECENT SESSION: June 28, 2026 — PHASE 5 COMPLETE ✅ + ENV LIFECYCLE (teardown/rebuild) PROVEN ✅**
 
 ### What Was Completed This Session
 - **PHASE 5 SCANNING ENGINE: DEPLOYED + VERIFIED END-TO-END.** All acceptance criteria pass.
@@ -1082,13 +1082,27 @@ ACCEPTANCE CRITERIA:
 - All 4 ECR repos created + images pushed: guardrail-{ingest,aggregator,rules-engine,checkov}-dev.
 - E2E verified: uploaded demo-master-bad.tf → status=COMPLETE in <5min, 48 findings,
   4 CRITICAL (S3-001, SG-001/2/3), both layers (custom + Checkov) present + deduped.
-- pytest: 32 passed, 70% coverage. Only code change this session: scanner-stack.ts (bootstrap flag).
+- pytest: 32 passed, 70% coverage. Code change: scanner-stack.ts (bootstrap flag). Merged via PR #10.
 
-### KNOWN LEFTOVER (low priority — clean up in Phase 11 tag/cost audit)
-- One orphaned custom resource `ScannerClusterVpc...RestrictDefaultSecurityGroup` from an OLD VPC
-  failed to delete during Phase A (its backing Lambda was already gone). DELETE was skipped — may
-  leave a default-SG custom-resource artifact. Also orphan ECR repo `guardrail-scanner` (no -dev
-  suffix) from earlier single-repo design. Neither blocks anything; remove during cleanup.
+### ALSO THIS SESSION — Environment lifecycle PROVEN (PR #11, merged to dev)
+- **Teardown guarantee tested LIVE:** `cdk destroy --all` → account swept 100% empty ($0, no
+  DELETE_FAILED). Fixed the teardown blocker: VPC `restrictDefaultSecurityGroup:false` (the flaky
+  default-SG custom resource). Old orphans (guardrail-scanner repo, old VPC CR) — deleted, GONE.
+- **Reliable setup/promotion:** `scripts/deploy_env.sh` = idempotent 4-step bootstrap
+  (deploy computeEnabled=false → push 4 images → deploy computeEnabled=true → seed rules). Breaks
+  the ECR deadlock; identical path for dev/staging/prod so promotion can't fail on sequencing.
+- **`scripts/seed_rules_catalog.py`** — a fresh rules-catalog table is EMPTY, so custom rules never
+  fire without seeding. Now a bootstrap step. (Gap found during the rebuild test.)
+- Ran the FULL destroy→empty→rebuild→E2E cycle 3× (48 findings, 9 custom + 39 Checkov, 4 CRITICAL).
+  Documented in the new CLAUDE.md "ENVIRONMENT LIFECYCLE" section + 4 KNOWN DECISIONS.
+
+### CURRENT AWS STATE (read before next session acts)
+- **dev is DEPLOYED + RUNNING** — freshly rebuilt from scratch at end of this session, E2E-verified.
+  It is NOT empty. To park at $0: `AWS_PROFILE=aws-admin npx cdk destroy --all --context env=dev --force`.
+  To (re)build: `AWS_PROFILE=aws-admin scripts/deploy_env.sh dev`.
+- **DEFERRED (do before first staging promotion):** GitHub Actions workflows 02/03 still run a bare
+  `cdk deploy --all` — OK for dev UPDATES, but the FIRST fresh staging/prod deploy will hit the ECR
+  deadlock. Wire 02/03 to call `scripts/deploy_env.sh` (or replicate its 4 steps) first.
 
 ### NEXT SESSION MUST START HERE
 **Phase 6 — AI Analysis Engine.** Reminder: prefix every AWS/CDK command with `AWS_PROFILE=aws-admin`.
@@ -1101,14 +1115,23 @@ STEP 2 — ai-engine/Dockerfile (python:3.12-slim + awslambdaric), guardrail-ai-
 STEP 3 — infrastructure/lib/ai-stack.ts (ai-analyzer Lambda, IAM bedrock:InvokeModel on Haiku+Sonnet
          ARNs only, EventBridge ScanComplete rule). Wire in app.ts with addDependency(scanner).
 STEP 4 — Tests: ai-engine/tests/ (test_bedrock_client 3, test_analyzer 5). pytest ≥70%.
-STEP 5 — DEPLOY: build+push guardrail-ai-engine-dev (USE buildx Lambda-compat flags — see above),
-         then cdk deploy GuardrailAiEngine-dev. NOTE: new AI Lambda also uses fromEcr → if ai-stack
-         creates its OWN ai-engine repo, it hits the SAME bootstrap deadlock. Either add a
-         computeEnabled-style flag to ai-stack, OR create the repo in foundation/scanner stack first.
+STEP 5 — DEPLOY via the lifecycle pattern (do NOT bare `cdk deploy`): the AI Lambda also uses
+         fromEcr → SAME bootstrap deadlock. Add a `computeEnabled`-style gate to ai-stack (gate the
+         ai-analyzer Lambda) AND extend `scripts/deploy_env.sh` to build+push guardrail-ai-engine-dev
+         (buildx Lambda-compat flags). Then one `scripts/deploy_env.sh dev` brings up Phase 6 too,
+         and teardown stays a clean `cdk destroy --all`. Verify the new repo is in the destroy sweep.
 STEP 6 — Verify Phase 6 acceptance criteria, then housekeeping.
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | ENV LIFECYCLE proven (PR #11 → dev). Teardown guarantee tested LIVE: cdk destroy --all
+             → account 100% empty ($0, no DELETE_FAILED). VPC restrictDefaultSecurityGroup:false
+             removes the flaky teardown-blocker. scripts/deploy_env.sh (4-step bootstrap) +
+             scripts/seed_rules_catalog.py make setup + dev→staging promotion reliable. Ran full
+             destroy→empty→rebuild→E2E cycle 3× (48 findings, 9 custom + 39 Checkov, 4 CRITICAL).
+             dev left RUNNING (freshly rebuilt). Deferred: wire CI 02/03 to deploy_env.sh before
+             first staging promotion. PR #10 also merged (Phase 5 deploy + CI conftest fix).
+
 2026-06-28 | Per-service ECR architecture implemented. One Dockerfile + ECR repo per
              Lambda/ECS task. scanner-stack.ts has 4 ECR repos. CDK synth clean.
              Pushed to feature/phase-5-scanning-engine (commit 9d290bf).
