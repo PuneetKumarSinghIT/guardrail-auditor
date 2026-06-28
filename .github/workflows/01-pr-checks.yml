@@ -83,20 +83,28 @@ jobs:
           fi
 
   tfsec:
+    # NOTE: the display name is kept as "(tfsec)" on purpose — the staging/main branch
+    # rulesets require a status check with this exact context name. tfsec was ARCHIVED
+    # by Aquasecurity in favour of Trivy (its install_linux.sh script is now dead, which
+    # broke this job), so the step below runs Trivy's IaC misconfiguration scan instead.
     name: Terraform Security Scan (tfsec)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run tfsec
+      - name: Run Trivy IaC misconfiguration scan (successor to deprecated tfsec)
         run: |
           if [ ! -d "terraform-examples" ]; then
             echo "terraform-examples/ not found — skipping (Phase 3 will add it)"
             exit 0
           fi
-          curl -sL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
-          tfsec terraform-examples/ --soft-fail --no-color
-        # soft-fail: bad/ files will have findings by design — that's expected
+          # Trivy's install script is actively maintained (unlike tfsec's archived one).
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          trivy --version
+          # config mode = IaC misconfiguration scan. --exit-code 0 so the INTENTIONAL
+          # findings in terraform-examples/bad/ never fail the build (matches the old
+          # tfsec --soft-fail behaviour). (--no-progress was removed in recent Trivy.)
+          trivy config terraform-examples/ --exit-code 0
 
   checkov:
     name: IaC Security Scan (Checkov)
