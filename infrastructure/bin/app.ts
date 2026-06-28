@@ -4,6 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { FoundationStack } from '../lib/foundation-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { ScannerStack } from '../lib/scanner-stack';
+import { AiStack } from '../lib/ai-stack';
 
 const app = new cdk.App();
 
@@ -36,3 +37,14 @@ const scanner = new ScannerStack(app, `GuardrailScanner-${env}`, {
   eventBus: foundation.eventBus,
 });
 scanner.addDependency(foundation);
+
+const ai = new AiStack(app, `GuardrailAi-${env}`, {
+  env: awsEnv,
+  description: `Guardrail Auditor - Bedrock AI analysis engine (${env})`,
+  scanJobsTable: foundation.scanJobsTable,
+  findingsTable: foundation.findingsTable,
+  kmsKey: foundation.encryptionKey,
+  eventBus: foundation.eventBus,
+});
+ai.addDependency(foundation);
+ai.addDependency(scanner);

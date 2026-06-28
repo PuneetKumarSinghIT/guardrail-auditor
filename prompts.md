@@ -2388,3 +2388,31 @@ Message: "docs: update CLAUDE.md Phase 5 checklist + SESSION TRACKER"
   - E2E: uploaded demo-master-bad.tf → COMPLETE, 48 findings (9 custom + 39 Checkov), 4 CRITICAL. Custom layer fires only because seeding works.
 **Tests:** N/A (infra/scripts); existing pytest unaffected.
 **Outcome:** DONE — teardown $0-clean and clean rebuild both proven; promotion now reliable; documented in CLAUDE.md.
+
+## 2026-06-28 16:45 — Ops: eu-north-1 sweep + accidental S3 bucket recovery
+**User Request:** (1) Check eu-north-1 for any provisioned resources and delete them. (2) An S3 bucket in us-east-1 was deleted by mistake — recover only what's needed, re-upload data, NO versioning, then confirm all prior phases run before starting Phase 6.
+**Actions Taken:**
+  - eu-north-1: full multi-service sweep → ZERO user resources; only the AWS default VPC ($0). Per user choice, left the default VPC in place. No deletions.
+  - us-east-1 recovery: diagnosed the deleted bucket = CDK bootstrap staging bucket `cdk-hnb659fds-assets-879072872327-us-east-1` (CDKToolkit stack still CREATE_COMPLETE but bucket 404). All 5 app buckets + 20-rule catalog + 4 ECR images were intact.
+  - Recreated ONLY the bootstrap bucket: block-all-public-access + AES256 + deny-insecure-transport, versioning DISABLED (per requirement).
+  - Verified prior phases live: uploaded demo-master-bad.tf → COMPLETE, 48 findings (4 CRIT/3 HIGH/40 MED/1 LOW), both layers (custom + Checkov). Cleaned up the test object.
+**Files Changed:** none (AWS-only ops).
+**Scope Impact:** none — restored to prior good state.
+
+## 2026-06-28 17:00 — Scope: S3 no-versioning HARD RULE in CLAUDE.md
+**User Request:** Include the "no S3 versioning" rule explicitly in CLAUDE.md for this demo project.
+**Action Taken:** Hardened COST GUARDRAILS with an explicit HARD RULE: no versioning on ANY bucket — the 5 app buckets, the CDK bootstrap/staging bucket, AND any manually-recreated bucket; CLI must never enable versioning; recreate deleted buckets WITHOUT versioning. (Rule already existed in KNOWN DECISIONS + infrastructure/CLAUDE.md; now unambiguous + prominent.)
+**Files Changed:** CLAUDE.md — COST GUARDRAILS "Always Enforce These".
+**Scope Impact:** Documentation hardening only; behavior already enforced (versioned:false everywhere).
+
+## 2026-06-28 17:15 — Phase 6 (AI Engine): deployed + wiring-verified; Bedrock model-ID correction
+**User Request:** Implement Phase 6 once prior phases confirmed.
+**Files Created:** ai-engine/src/{analyzer.py, bedrock_client.py, prompts/explain_risk.txt, generate_fix.txt, score_risk.txt}, ai-engine/{Dockerfile, requirements.txt, __init__.py}, ai-engine/tests/{test_bedrock_client.py (3), test_analyzer.py (5)}, infrastructure/lib/ai-stack.ts.
+**Files Modified:** infrastructure/bin/app.ts (AiStack wired, addDependency foundation+scanner), scripts/deploy_env.sh (build_push ai-engine), conftest.py (added ai-engine to path tuple), removed scanner/src/__init__.py (namespace-package merge so shared `src` resolves both scanner + ai-engine under one pytest session).
+**Bugs/Findings Fixed:**
+  - CLAUDE.md model IDs were WRONG: Claude 4.x on Bedrock is INFERENCE_PROFILE-only (no on-demand). Corrected invoke IDs → us.anthropic.claude-haiku-4-5-20251001-v1:0 and us.anthropic.claude-sonnet-4-6; IAM scoped to inference-profile ARNs + foundation-model ARNs (region wildcard), never "*".
+  - BedrockClient routing test reused an exhausted StreamingBody → switched to per-call side_effect.
+**Deploy:** two-phase (computeEnabled gate) scoped with --exclusively to avoid touching scanner. ECR repo + Lambda(512MB/300s) + ScanComplete EventBridge rule live. Direct-invoke wiring test: analyzer read job+findings and called Bedrock, failing ONLY at InvokeModel "Operation not allowed" → proves IAM/env/DDB/prompt all correct.
+**Tests:** 8 ai-engine passed; full suite 42 passed, 76% coverage (scanner 32 intact).
+**BLOCKER (user action):** Bedrock model access NOT_AUTHORIZED for Haiku 4.5 + Sonnet 4.6 — user enabling in console. After access on: run E2E (scan → AI_COMPLETE w/ explanations+fixes) + finish Phase 6 housekeeping (checklist [x], SESSION TRACKER).
+**Outcome:** IN-PROGRESS — deployed + wiring-verified; pending model access for E2E verification.
