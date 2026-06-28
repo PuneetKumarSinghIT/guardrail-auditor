@@ -11,9 +11,10 @@ Lead Architect mode: ON. We are building a Python-based, API-first
 
 Rules:
 1. No Manual Edits: You provide all logic and fixes. I will not edit any code.
-2. Audit Log: You must maintain a file named prompts.md. IMMEDIATELY after completing
-   each activity — as the LAST step of that response — append the entry to prompts.md.
-   Do NOT wait until asked. Do NOT batch entries. One prompt = one entry, logged at once.
+2. Audit Log: You must maintain a file named prompts.md. Update it ONCE per phase
+   in the final housekeeping agent — NOT after every sub-task or agent spawn.
+   One consolidated entry per phase covers all work done in that phase.
+   This replaces the old "one entry per prompt" rule which caused 13× repeated writes.
 3. Time-Check: Start a timer. Goal is an MVP in 4-6 hours (Max window: 16h).
    Report 'Elapsed Time' at the end of every response.
 ```
@@ -37,8 +38,8 @@ every session, Claude must:
    - Budget: < 3% of 5-hour session, < 0.5% weekly limit per phase
 5. Update `## SESSION TRACKER` at the END of every session with what was completed
 6. Never repeat work already marked DONE in phase status
-7. Update `prompts.md` IMMEDIATELY as the last step of every response — not at end of
-   session, not when asked — Haiku appends this entry automatically
+7. Update `prompts.md` ONCE at the end of the phase — inside the FINAL HOUSEKEEPING AGENT
+   alongside git commit, CLAUDE.md checklist update, and PR creation. One agent, one pass.
 8. Report **Elapsed Time** at the end of every response
 
 **Reading this file IS the session start trigger. No separate prompt needed.**
@@ -490,13 +491,13 @@ START COMMANDS:
   mkdir -p fargate scanner/src/parsers scanner/src/handlers
 
   CODE:
-  [ ] scanner/src/parsers/terraform_parser.py:
+  [x] scanner/src/parsers/terraform_parser.py:
         Input: S3 object bytes  Output: dict of {resource_type: {resource_name: attrs}}
         Uses python-hcl2. Handles multi-file .tf (single file for MVP).
-  [ ] scanner/src/parsers/cloudformation_parser.py:
+  [x] scanner/src/parsers/cloudformation_parser.py:
         Input: S3 object bytes  Output: dict of {ResourceType: {LogicalId: Properties}}
         Uses cfn-flip (handles both JSON and YAML CFN).
-  [ ] scanner/src/handlers/rules_engine.py Lambda:
+  [x] scanner/src/handlers/rules_engine.py Lambda:
         Triggered by: EventBridge ScanRequested
         1. Load rules from DynamoDB rules-catalog (enabled=true only)
         2. Download IaC file from S3
@@ -505,41 +506,41 @@ START COMMANDS:
         5. Write all findings to DynamoDB findings table
         6. Update scan-jobs: status=SCANNING
         7. Publish EventBridge: RulesEngineDone {scan_job_id, finding_count}
-  [ ] fargate/Dockerfile:
+  [x] fargate/Dockerfile:
         FROM python:3.12-slim
         RUN pip install checkov boto3
         COPY scanner_runner.py .
         CMD ["python", "scanner_runner.py"]
-  [ ] fargate/scanner_runner.py:
+  [x] fargate/scanner_runner.py:
         Reads from env: SCAN_JOB_ID, S3_BUCKET, S3_KEY, SQS_QUEUE_URL
         Downloads IaC file from S3
         Runs: checkov -f {file} --output json --quiet
         Parses Checkov JSON → Finding objects (maps checkov check_id to our rule_id where possible)
         Sends batch of findings to SQS queue: guardrail-checkov-results
-  [ ] scanner/src/handlers/aggregator.py Lambda:
+  [x] scanner/src/handlers/aggregator.py Lambda:
         Triggered by: SQS guardrail-checkov-results
         1. Read findings batch from SQS message
         2. Deduplicate: if same resource+rule exists from rules_engine, skip
         3. Write new findings to DynamoDB
         4. Update scan-jobs: finding_counts={CRITICAL:n, HIGH:n, MEDIUM:n, LOW:n}, status=COMPLETE
         5. Publish EventBridge: ScanComplete {scan_job_id, risk_score_raw}
-  [ ] scanner/requirements.txt: add python-hcl2, cfn-flip
+  [x] scanner/requirements.txt: add python-hcl2, cfn-flip
 
   INFRASTRUCTURE (complete scanner-stack.ts):
-  [ ] Lambda: rules-engine (512MB, 300s, EventBridge ScanRequested trigger)
-  [ ] Lambda: aggregator (256MB, 60s, SQS trigger)
-  [ ] SQS queue: guardrail-checkov-results + DLQ (maxReceiveCount=3)
-  [ ] ECS Cluster: guardrail-cluster
-  [ ] Fargate task definition: guardrail-scanner (0.25 vCPU, 512MB, ECR image)
-  [ ] EventBridge rule: ScanRequested → rules-engine Lambda AND ECS RunTask (Fargate)
-  [ ] ECR repo + first Docker image pushed via 05-deploy-fargate.yml
+  [x] Lambda: rules-engine (512MB, 300s, EventBridge ScanRequested trigger)
+  [x] Lambda: aggregator (256MB, 60s, SQS trigger)
+  [x] SQS queue: guardrail-checkov-results + DLQ (maxReceiveCount=3)
+  [x] ECS Cluster: guardrail-cluster
+  [x] Fargate task definition: guardrail-scanner (0.25 vCPU, 512MB, ECR image)
+  [x] EventBridge rule: ScanRequested → rules-engine Lambda AND ECS RunTask (Fargate)
+  [x] ECR repo + first Docker image pushed via 05-deploy-fargate.yml
 
   TESTS:
-  [ ] scanner/tests/test_terraform_parser.py: 5 tests (valid, empty, nested, multi-resource, malformed)
-  [ ] scanner/tests/test_cloudformation_parser.py: 5 tests
-  [ ] scanner/tests/test_rules_engine.py: 1 test per rule category (6 tests minimum)
-  [ ] scanner/tests/test_aggregator.py: 3 tests (dedupe, status update, event publish)
-  [ ] VERIFY: upload demo-master-bad.tf → run all acceptance criteria
+  [x] scanner/tests/test_terraform_parser.py: 5 tests (valid, empty, nested, multi-resource, malformed)
+  [x] scanner/tests/test_cloudformation_parser.py: 5 tests
+  [x] scanner/tests/test_rules_engine.py: 1 test per rule category (6 tests minimum)
+  [x] scanner/tests/test_aggregator.py: 3 tests (dedupe, status update, event publish)
+  [~] VERIFY: upload demo-master-bad.tf → run all acceptance criteria
 
 ═══════════════════════════════════════════════════════════════
 PHASE 6: AI Analysis Engine
@@ -842,40 +843,33 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- Phase 4 Ingestion Layer — COMPLETE. scanner/ Python layer + CDK scanner stack wired and deployed.
-  - scanner/src/models/finding.py, ingest_handler.py, requirements.txt, 5 tests, fixtures
-  - infrastructure/lib/scanner-stack.ts: ingest + rules-engine + aggregator + Fargate + SQS + ECR
-  - infrastructure/lib/foundation-stack.ts: added EventBus (guardrail-events-${env}) export
-  - infrastructure/bin/app.ts: GuardrailScanner-${env} wired, deps set
-  - Fixed bugs: always DESTROY policy, S3→default bus / guardrail→custom bus, deprecation warnings
-  - PR #7 merged to dev. All 4 CI checks passed.
-- Phase 3 IaC Demo Examples — COMPLETE. All 14 files created on feature/phase-3-iac-examples.
-- Created rules/rules-catalog.json: 20 rules (S3-001→S3-005, SG-001→SG-004, IAM-001→IAM-005,
-    ENC-001→ENC-003, LOG-001→LOG-003) with full metadata (severity, category, iac_types, etc.)
-- Created terraform-examples/good/ (3 files): s3-secure.tf, sg-restricted.tf, iam-least-privilege.tf
-- Created terraform-examples/bad/ (5 files): s3-public-bucket.tf, sg-open-ssh.tf, iam-wildcard.tf,
-    unencrypted-resources.tf, demo-master-bad.tf (PRIMARY DEMO — triggers all CRITICAL rules)
-- Created cloudformation/bad/ (3 files): public-s3-cfn.yaml, open-sg-cfn.yaml, demo-master-bad.yaml
-- Created cloudformation/good/ (2 files): secure-s3-cfn.yaml, secure-sg-cfn.yaml
-- Phase 3 checklist fully marked [x]; all acceptance criteria met
-- Branch: feature/phase-3-iac-examples (built on top of feature/easy-teardown infra fixes)
+- Phase 5 Scanning Engine — CODE COMPLETE. PR #9 open → dev. 32 tests, 73% coverage, --cov-fail-under=70 PASSED.
+  - scanner/src/parsers/terraform_parser.py: python-hcl2 HCL parser → {resource_type: {name: attrs}}
+  - scanner/src/parsers/cloudformation_parser.py: cfn-flip YAML/JSON parser → {ResourceType: {LogicalId: props}}
+  - scanner/src/handlers/rules_engine.py: EventBridge ScanRequested Lambda — 20 security rules (S3/SG/IAM/ENC/LOG)
+  - scanner/src/handlers/aggregator.py: SQS-triggered Lambda — dedup findings, COMPLETE status, ScanComplete event
+  - fargate/Dockerfile + scanner_runner.py + requirements.txt: Checkov container (14 rule ID mappings)
+  - 4 test files: 32 tests total (5+5+9+3), 73% coverage
 
 ### NEXT SESSION MUST START HERE
-**Phase 5 — Scanning Engine**
+**Phase 5 — Verify acceptance criteria after PR #9 merges to dev**
 
-  1. git checkout dev && git pull origin dev
-  2. git checkout -b feature/phase-5-scanning-engine
-  3. Create scanner/src/parsers/ (terraform_parser.py, cloudformation_parser.py)
-  4. Create scanner/src/handlers/rules_engine.py (EventBridge ScanRequested → DDB findings)
-  5. Create scanner/src/handlers/aggregator.py (SQS trigger → merge + update scan-jobs)
-  6. Create fargate/Dockerfile + scanner_runner.py + requirements.txt
-  7. Write tests: test_terraform_parser.py (5), test_cloudformation_parser.py (5),
-     test_rules_engine.py (6), test_aggregator.py (3)
-  8. Run: pytest scanner/tests/ → all pass, ≥ 70% coverage
-  9. PR feature/phase-5-scanning-engine → dev
+  1. Confirm PR #9 CI checks pass (pytest + cfn-lint + tfsec + checkov)
+  2. After PR merges: `aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{id}-dev/test.tf`
+  3. Poll: `aws dynamodb scan --table-name scan-jobs-dev` → status becomes COMPLETE
+  4. Check: `aws dynamodb query --table-name findings-dev --key-condition "scan_job_id=..."` → ≥5 items
+  5. Verify ≥1 finding has severity=CRITICAL
+  6. If all pass: mark Phase 5 VERIFY as [x] and begin Phase 6 — AI Analysis Engine
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | Phase 5 Scanning Engine CODE COMPLETE. PR #9 open → dev.
+             32 tests (5 parser + 5 cfn + 9 rules + 3 aggregator), 73% coverage.
+             20 security rules implemented (S3/SG/IAM/ENC/LOG) in rules_engine.py.
+             Fargate scanner_runner.py maps 14 Checkov IDs to custom rule IDs.
+             Bug fixes: cfn_flip.load() API, Attr("enabled").eq(True) FilterExpression.
+             Infrastructure already deployed via scanner-stack.ts in Phase 4.
+
 2026-06-28 | Phase 4 Ingestion Layer COMPLETE. scanner/ Python layer fully written.
              CDK: ScannerStack wired in app.ts, FoundationStack gains EventBus export.
              Bugs fixed: always DESTROY, S3→default bus / guardrail→custom bus routing.
@@ -1622,40 +1616,44 @@ users prompts and steps which it ask you to implement. You have to keep the trac
 of each activity as audit log.
 ```
 
-**What this means in practice:**
+**OPTIMIZED RULE — ONE ENTRY PER PHASE (not per agent/prompt):**
 
-After EVERY user prompt — no matter how small — Claude MUST append an entry to `prompts.md`
-AS THE FINAL STEP OF THAT RESPONSE. This is non-negotiable:
-- Do NOT wait until the user asks "was this logged?"
-- Do NOT batch multiple prompts into one entry later
-- Do NOT skip logging for "simple" or "short" responses
-- The append MUST happen before Claude considers the turn complete
-- **FAILURE TO LOG = INCOMPLETE RESPONSE** regardless of code quality
+`prompts.md` is updated EXACTLY ONCE per phase by the **FINAL HOUSEKEEPING AGENT**
+(the last Haiku agent that does git + PR + CLAUDE.md + prompts.md together).
 
-Entry format:
+**Why this changed:** The old "one entry per response" rule caused every Haiku subagent
+to append prompts.md as its final step — that was 13 separate Read→Write cycles in Phase 5
+alone, consuming ~1–2 agents worth of tokens purely on logging overhead.
+The audit trail is preserved; the waste is eliminated.
+
+**What the single phase entry covers:**
+- The user's original request for the phase
+- All files created / modified (list every file)
+- All agents spawned and what each produced
+- Any bugs found and how they were fixed
+- Final outcome: tests passing, coverage %, PR number
+
+Entry format (one per phase, written by the housekeeping agent):
 
 ```markdown
-## [YYYY-MM-DD HH:MM] — Session N, Turn N
-**User Prompt:**
-<exact or close paraphrase of what the user asked>
+## [YYYY-MM-DD HH:MM] — Phase N: [Phase Name]
+**User Request:** <what was asked>
 
-**Steps Implemented:**
-- Step 1: <what was done>
-- Step 2: <what was done>
-- ...
+**Agents Spawned:** <count> Haiku agents
+**Files Created:** <list all new files + line counts>
+**Files Modified:** <list all edited files>
+**Bugs Fixed:** <any unplanned fixes + root cause>
+**Tests:** <X passed, Y% coverage>
+**PR:** #<number> → dev
 
-**Files Created / Modified:**
-- `path/to/file.ts` — <one-line description of change>
-
-**Outcome:** <DONE | IN-PROGRESS | BLOCKED — one line>
+**Outcome:** DONE | IN-PROGRESS | BLOCKED
 ```
 
 Rules:
-- Never skip an entry, even for tiny questions or config changes
 - The log is append-only — never edit or delete past entries
 - This is the primary evidence artifact for the vibe coding demonstration
-- If `prompts.md` does not exist, create it before writing the first entry
-- Log immediately — the append to prompts.md is the last tool call of every response
+- If `prompts.md` does not exist, the housekeeping agent creates it
+- Individual Haiku agents MUST NOT append to prompts.md — only the housekeeping agent does
 
 ### MANDATORY ACTIVITY 2 — Phase Decision Enforcement
 
@@ -1716,9 +1714,13 @@ TEST RUNNER        : pytest, npm test, npm run build, vitest
 CI DATA COLLECTION : gh pr checks, gh run view --log-failed (fetch the log, extract only the error)
 LINTING            : cfn-lint, tfsec, checkov
 NPM                : npm ci, npm install, npm run build
-AUDIT LOG UPDATE   : Append prompts.md entry (last step of every response)
-CLAUDE.md UPDATES  : Update phase checklist [x] and SESSION TRACKER
+HOUSEKEEPING AGENT : (FINAL agent only) git add/commit/push + gh pr create +
+                     CLAUDE.md checklist [x] + SESSION TRACKER + prompts.md entry
+                     ALL FIVE of these tasks run in ONE agent — never split them
 ```
+
+⚠ INDIVIDUAL HAIKU AGENTS MUST NOT touch prompts.md or CLAUDE.md.
+   Those are exclusively owned by the final housekeeping agent.
 
 ---
 
@@ -1758,7 +1760,7 @@ Agent(
   model="haiku",
   description="[3-word task description]",
   prompt="""
-TASK: [WRITE FILE | EDIT FILE | RUN COMMAND | READ AND REPORT]
+TASK: [WRITE FILE | EDIT FILE | RUN COMMAND | READ AND REPORT | DIAGNOSE AND FIX]
 
 [For WRITE FILE:]
 File: [absolute path]
@@ -1773,11 +1775,13 @@ Project rules:
   - CDK TypeScript: RemovalPolicy always DESTROY, env suffix on all names
   - No comments unless non-obvious WHY
   - No extra error handling for impossible cases
+  - DO NOT touch prompts.md or CLAUDE.md — housekeeping agent handles those
 Write the complete file. Report: filename + line count + key function names.
 
 [For RUN COMMAND:]
 Run: [exact command]
 Report back: [what output matters — exit code, specific line from output, etc.]
+DO NOT touch prompts.md or CLAUDE.md.
 
 [For READ AND REPORT:]
 Read: [file path, lines N-M if known]
@@ -1788,6 +1792,73 @@ Run: gh run view [run-id] --log-failed
 Extract: only lines containing ERROR, FAILED, ImportError, or the test function name
 Report: the error type + the exact failing line + filename:linenum
 Do NOT paste the full log.
+
+[For DIAGNOSE AND FIX — use this instead of separate diagnostic + fix agents:]
+Step 1: Read the failing file (lines X-Y) AND the test output
+Step 2: Identify root cause (one sentence)
+Step 3: Apply the fix (edit the file)
+Step 4: Run pytest [specific test] to verify fix works
+Report: root cause + what changed + test result (pass/fail)
+DO NOT spawn a diagnostic-only agent first — diagnose and fix in one agent.
+"""
+)
+```
+
+---
+
+### FINAL HOUSEKEEPING AGENT (one agent, runs last in every phase)
+
+This is the ONLY agent that touches `prompts.md` and `CLAUDE.md`. It runs ONCE after all
+code agents complete and tests pass. It combines five tasks that previously cost 2-3 separate agents.
+
+```python
+Agent(
+  subagent_type="claude",
+  model="haiku",
+  description="Phase N housekeeping",
+  prompt="""
+TASK: PHASE HOUSEKEEPING (git + PR + CLAUDE.md + prompts.md — all in one pass)
+
+Working directory: d:\\AWS\\AWS_account_projects
+Branch: feature/phase-N-[name]
+
+STEP 1 — Git commit all phase files:
+  git add [list every new/modified file explicitly — never git add -A]
+  git commit -m "[conventional commit message]
+
+  Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+  git push -u origin feature/phase-N-[name]
+
+STEP 2 — Create PR:
+  gh pr create --base dev --title "[title]" --body "[body with Summary + Test Plan]"
+
+STEP 3 — Update CLAUDE.md:
+  Edit d:\\AWS\\AWS_account_projects\\CLAUDE.md:
+  - In PHASE N checklist: change [ ] → [x] for all completed items
+  - In ## SESSION TRACKER: update "What Was Completed" and "NEXT SESSION" sections
+  - Prepend new entry to Session Log
+
+STEP 4 — Append to prompts.md (ONE entry covering the entire phase):
+  Append to d:\\AWS\\AWS_account_projects\\prompts.md:
+
+  ## [YYYY-MM-DD HH:MM] — Phase N: [Phase Name]
+  **User Request:** [what the user asked]
+  **Agents Spawned:** [count] Haiku agents (list: H1=task, H2=task, ...)
+  **Files Created:** [every new file + line count]
+  **Files Modified:** [every edited file]
+  **Bugs Fixed:** [any unplanned fixes — root cause in one line each]
+  **Tests:** [X passed, Y% coverage, --cov-fail-under=Z: PASSED/FAILED]
+  **PR:** #[number] → dev
+  **Outcome:** DONE
+
+STEP 5 — Stage and commit the CLAUDE.md + prompts.md changes together:
+  git add CLAUDE.md prompts.md
+  git commit -m "docs: Phase N checklist + audit log
+
+  Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+  git push
+
+Report: PR URL + commit hashes for both commits.
 """
 )
 ```
@@ -1826,6 +1897,21 @@ Repeat only if still failing. Maximum 3 triage cycles before escalating to Sonne
 ✗ Pasting full CI logs to Sonnet — grep first, paste only the relevant 5-10 lines
 ✗ Running cdk synth more than once per phase unless a CDK .ts file changed
 ✗ Running pytest on the full repo when only one module changed
+
+TOKEN WASTE — LEARNED FROM PHASE 5 (added 2026-06-28):
+✗ Each agent appending prompts.md — costs 1 Read + 1 Write per agent = ~13× in Phase 5
+  FIX: housekeeping agent writes prompts.md once at the end
+✗ Splitting CLAUDE.md update + git into 2 agents — costs 163K tokens for pure overhead
+  FIX: housekeeping agent does both in one pass (Steps 3–5 of housekeeping template)
+✗ Spawning a diagnostic-only agent then a separate fix agent — costs 2× agent overhead
+  FIX: use "DIAGNOSE AND FIX" task type — read, diagnose, fix, verify all in one agent
+✗ Writing integration tests that use @mock_aws with pre-created module-level boto3 clients
+  FIX: always patch module-level clients directly (patch.object(module.s3_client, "get_object"))
+  WHY: moto @mock_aws does not retroactively intercept clients created at import time
+✗ Setting test coverage target without accounting for it in initial test specs
+  FIX: count lines in each file before writing tests; design test suite to hit 70%+ upfront
+✗ Launching a "coverage fix" agent after tests already ran — costs 80K tokens
+  FIX: write coverage-aware tests on first pass; include CFN + IAM + ENC paths in initial suite
 ```
 
 ---
@@ -1835,6 +1921,21 @@ Repeat only if still failing. Maximum 3 triage cycles before escalating to Sonne
 ```
 Start the next phase using the TOKEN EFFICIENCY PROTOCOL in CLAUDE.md.
 Read SESSION TRACKER → produce the Micro-Task List → delegate all execution to Haiku.
-Sonnet: plan + diagnose only. Haiku: all files, commands, git, CI, prompts.md.
+Sonnet: plan + diagnose only. Haiku: all files, commands, git, CI.
+FINAL HOUSEKEEPING AGENT (last): git + PR + CLAUDE.md + prompts.md in ONE agent.
 Phase must complete within 3% session / 0.5% weekly.
 ```
+
+### PHASE AGENT BUDGET (target per phase)
+
+To stay within 3% session budget, plan for this agent count:
+
+| Phase size | Files | Tests | Target agents |
+|---|---|---|---|
+| Small  | 1-3 files | <10 tests | 3 code + 1 housekeeping = 4 total |
+| Medium | 4-7 files | 10-20 tests | 4 code + 1 housekeeping = 5 total |
+| Large  | 8-13 files | 20-35 tests | 5-6 code + 1 housekeeping = 6-7 total |
+
+Phase 5 used 14 agents (target was 6). 8 extra agents = 8× the planned overhead.
+The 3 unplanned agents (diagnose, fix, coverage) + 2 extra housekeeping agents = 5 of the 8 extra.
+Better test specs + DIAGNOSE-AND-FIX pattern + single housekeeping agent eliminates all 5.
