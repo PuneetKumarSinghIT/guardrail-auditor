@@ -11,10 +11,25 @@ Lead Architect mode: ON. We are building a Python-based, API-first
 
 Rules:
 1. No Manual Edits: You provide all logic and fixes. I will not edit any code.
-2. Audit Log: You must maintain a file named prompts.md. Update it ONCE per phase
-   in the final housekeeping agent — NOT after every sub-task or agent spawn.
-   One consolidated entry per phase covers all work done in that phase.
-   This replaces the old "one entry per prompt" rule which caused 13× repeated writes.
+2. Audit Log: Two modes — determined by what kind of session is happening:
+
+   MODE A — CLARIFICATION / SCOPING session (no code written, discussing/deciding/fixing CLAUDE.md):
+     Update prompts.md AFTER EVERY CHAT TURN.
+     Entry is lightweight: prompt + action + scope impact.
+     This captures the vibe coding skill — every decision, every correction, every insight.
+     Trigger: any turn where the user is asking questions, resolving ambiguity, reviewing,
+              or directing changes to scope/architecture/CLAUDE.md.
+
+   MODE B — PHASE IMPLEMENTATION session (writing code, running tests, deploying):
+     Update prompts.md ONCE at the end of the phase in the final housekeeping turn.
+     Entry is comprehensive: all files, bugs, tests, PR number.
+     This avoids the 13× repeated write problem from Phase 5.
+     Trigger: any turn where code files are being written, tests run, or AWS resources deployed.
+
+   DETECT THE MODE at the start of every response. If the user's message is exploratory,
+   corrective, or architectural → MODE A (log this turn). If it is implementation work → MODE B
+   (hold the log until phase end). A single session can switch between modes — that is fine.
+
 3. Time-Check: Start a timer. Goal is an MVP in 4-6 hours (Max window: 16h).
    Report 'Elapsed Time' at the end of every response.
 ```
@@ -32,14 +47,16 @@ every session, Claude must:
 2. Check `## SESSION TRACKER` to know exactly where we left off
 3. Check `## PHASE STATUS` to know what is done vs in-progress vs not started
 4. **IMMEDIATELY activate the TOKEN EFFICIENCY PROTOCOL** (see section below):
-   - You (Sonnet) produce the Micro-Task List for the current phase
-   - Spawn Haiku subagents for ALL execution: file writes, edits, git, aws, cdk, pytest, CI
-   - Sonnet only: diagnose failures, approve results, architectural decisions (≤ 5 turns/phase)
-   - Budget: < 3% of 5-hour session, < 0.5% weekly limit per phase
+   - Sonnet 4.6 handles ALL execution inline: file writes, edits, git, aws, cdk, pytest, CI
+   - No Haiku subagents — Haiku is retired from this project's Claude Code workflow
+   - Use parallel tool calls for independent tasks within a single response
+   - Diagnose + fix inline when failures occur; never spawn a separate "fix agent"
 5. Update `## SESSION TRACKER` at the END of every session with what was completed
 6. Never repeat work already marked DONE in phase status
-7. Update `prompts.md` ONCE at the end of the phase — inside the FINAL HOUSEKEEPING AGENT
-   alongside git commit, CLAUDE.md checklist update, and PR creation. One agent, one pass.
+7. Update `prompts.md` based on session mode (see Rule 2 above):
+   - CLARIFICATION session → append one lightweight entry at the END of EVERY response
+   - IMPLEMENTATION session → append one comprehensive entry at the END of the PHASE only
+   Both are written inline by Sonnet 4.6 — no subagents touch prompts.md.
 8. Report **Elapsed Time** at the end of every response
 
 **Reading this file IS the session start trigger. No separate prompt needed.**
@@ -57,7 +74,7 @@ via the TOKEN EFFICIENCY PROTOCOL defined at the bottom of this file.
 **Status:** In active development. Started June 2026.
 **AWS Account Type:** Personal demo/portfolio account — NOT customer production data.
 **Primary Region:** us-east-1
-**Secondary Region:** us-west-2 (DR only, implement in Phase 8)
+**Secondary Region:** us-west-2 (DR only, implement in Phase 11 — Production Hardening)
 
 ### What This Project Does
 Ingests Terraform (.tf, .hcl) and CloudFormation (.yaml, .json, .template) files,
@@ -123,22 +140,48 @@ d:\AWS\AWS_account_projects\
 │       ├── open-sg-cfn.yaml           ← CFN version of network violations
 │       └── demo-master-bad.yaml       ← All CFN violations — use for demos
 │
-├── scanner/                           ← Python 3.12 Lambda functions
+├── scanner/                           ← Python 3.12 — Docker images only (Lambda + ECS)
+│   ├── Dockerfile                     ← Single shared image: all scanner compute (ingest/rules/aggregator)
 │   ├── CLAUDE.md                      ← Scanner-specific rules
-│   ├── src/
-│   │   ├── handlers/
-│   │   │   ├── ingest_handler.py      ← S3/webhook ingestion Lambda
-│   │   │   ├── rules_engine.py        ← Custom rules scan Lambda
-│   │   │   ├── aggregator.py          ← Merges Lambda + Fargate results
-│   │   │   └── report_generator.py    ← PDF report Lambda
-│   │   ├── parsers/
-│   │   │   ├── terraform_parser.py    ← python-hcl2 based HCL parser
-│   │   │   └── cloudformation_parser.py
-│   │   └── models/
-│   │       └── finding.py             ← Finding dataclass
-│   ├── tests/
-│   │   └── fixtures/                  ← Sample bad IaC files for testing
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── src/
+│       ├── main.py                    ← Entry point: dispatches by MODE env var (ingest|rules_engine|aggregator|report|email|failure)
+│       ├── controllers/               ← Event routing + request shaping — NO business logic here
+│       │   ├── ingest_controller.py   ← Parses S3/EventBridge event → calls IngestService
+│       │   ├── scan_controller.py     ← Parses ScanRequested event → calls ScanService
+│       │   ├── aggregator_controller.py ← Parses SQS message → calls AggregationService
+│       │   ├── report_controller.py   ← Parses AIAnalysisComplete event → calls ReportService
+│       │   └── email_controller.py    ← Parses ReportGenerated event → calls EmailService
+│       ├── services/                  ← Business logic — Single Responsibility per service
+│       │   ├── ingest_service.py      ← File validation, DDB job record, EventBridge publish
+│       │   ├── scan_service.py        ← Parser selection, rule orchestration, findings write
+│       │   ├── aggregation_service.py ← Checkov result dedup, DDB update, ScanComplete event
+│       │   ├── report_service.py      ← PDF generation (reportlab), S3 upload, ReportGenerated event
+│       │   └── email_service.py       ← MIME email build, PDF attachment, SES send
+│       ├── core/                      ← Domain models + interfaces — Open/Closed, DI
+│       │   ├── models/
+│       │   │   ├── finding.py         ← Finding dataclass
+│       │   │   └── scan_job.py        ← ScanJob dataclass
+│       │   └── interfaces/
+│       │       ├── parser_interface.py   ← ABC: parse(bytes) → dict
+│       │       └── rule_interface.py     ← ABC: apply(parsed_iac, scan_job_id) → list[Finding]
+│       ├── adapters/                  ← External integrations — Dependency Inversion
+│       │   ├── aws/
+│       │   │   ├── dynamodb_adapter.py
+│       │   │   ├── s3_adapter.py
+│       │   │   ├── eventbridge_adapter.py
+│       │   │   └── sqs_adapter.py
+│       │   └── parsers/               ← Implement parser_interface.py
+│       │       ├── terraform_parser.py   ← python-hcl2 based
+│       │       └── cloudformation_parser.py ← cfn-flip based
+│       └── rules/                     ← Implement rule_interface.py — one file per category
+│           ├── s3_rules.py
+│           ├── network_rules.py
+│           ├── iam_rules.py
+│           ├── encryption_rules.py
+│           └── logging_rules.py
+│   └── tests/
+│       └── fixtures/                  ← Sample bad IaC files for testing
 │
 ├── ai-engine/                         ← Bedrock AI analysis
 │   ├── CLAUDE.md                      ← AI-specific rules
@@ -152,45 +195,39 @@ d:\AWS\AWS_account_projects\
 │   ├── tests/
 │   └── requirements.txt
 │
-├── api/                               ← API Gateway Lambda handlers
-│   ├── CLAUDE.md                      ← API-specific rules
+├── api/                               ← API Gateway REST Lambda (guardrail-api ECR image)
 │   ├── src/
 │   │   ├── routes/
-│   │   │   ├── scans.py               ← POST /scans, GET /scans/{id}
-│   │   │   ├── findings.py            ← GET /findings
-│   │   │   ├── dashboard.py           ← GET /dashboard/summary
-│   │   │   └── reports.py             ← GET /scans/{id}/report
-│   │   ├── middleware/
-│   │   │   ├── auth.py                ← Cognito JWT validation
-│   │   │   └── cors.py                ← CORS headers
-│   │   └── websocket/
-│   │       └── connection_handler.py  ← WebSocket connect/disconnect/message
+│   │   │   ├── scans.py               ← POST /v1/scans, GET /v1/scans, GET /v1/scans/{id}
+│   │   │   └── reports.py             ← GET /v1/scans/{id}/report (presigned PDF URL)
+│   │   └── middleware/
+│   │       ├── auth.py                ← Cognito JWT validation (python-jose)
+│   │       └── cors.py                ← CORS headers (CloudFront domain only)
 │   ├── tests/
-│   └── requirements.txt
+│   └── requirements.txt               ← boto3, python-jose[cryptography]
+│   NOTE: No websocket/, no dashboard.py, no findings.py — removed from scope
 │
-├── frontend/                          ← React + TypeScript dashboard
-│   ├── CLAUDE.md                      ← Frontend-specific rules
+├── frontend/                          ← React + TypeScript static site (S3 + CloudFront)
 │   ├── src/
-│   │   ├── components/
-│   │   │   ├── RiskScoreMeter.tsx     ← Big circular score display
-│   │   │   ├── FindingsTable.tsx      ← Sortable findings with severity badges
-│   │   │   ├── TrendChart.tsx         ← Recharts line chart for history
-│   │   │   ├── AiExplanationPanel.tsx ← Slide-in panel with Bedrock output
-│   │   │   ├── ScanUploader.tsx       ← Drag-and-drop IaC file upload
-│   │   │   └── ScanProgress.tsx       ← WebSocket-driven progress bar
 │   │   ├── pages/
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── ScanHistory.tsx
-│   │   │   └── Login.tsx
+│   │   │   ├── LoginPage.tsx          ← Cognito sign-in form
+│   │   │   ├── ScanListPage.tsx       ← All scans table + ScanUploader
+│   │   │   └── ScanDetailPage.tsx     ← Risk meter + findings table + PDF download
+│   │   ├── components/
+│   │   │   ├── RiskScoreMeter.tsx     ← SVG circular gauge (green/amber/red/dark-red)
+│   │   │   ├── FindingsTable.tsx      ← Sortable by severity, filter bar, row click → drawer
+│   │   │   ├── AiExplanationPanel.tsx ← Slide-in drawer: Explanation tab + Fix tab
+│   │   │   └── ScanUploader.tsx       ← react-dropzone, PUT to S3 presigned URL
 │   │   ├── hooks/
-│   │   │   ├── useWebSocket.ts        ← WebSocket connection hook
-│   │   │   └── useScans.ts            ← React Query hooks for API calls
+│   │   │   └── useScans.ts            ← React Query: useScans, useScan, useReportUrl, useCreateScan
 │   │   └── lib/
-│   │       ├── api.ts                 ← Axios instance with auth interceptor
-│   │       └── auth.ts                ← Cognito Amplify auth wrapper
+│   │       ├── api.ts                 ← Axios instance with Cognito JWT interceptor
+│   │       ├── auth.ts                ← Amplify v6 wrapper (signIn, signOut, getIdToken)
+│   │       └── env.ts                 ← Typed VITE_* env vars (no VITE_WS_URL)
 │   ├── public/
 │   ├── package.json
 │   └── vite.config.ts
+│   NOTE: No TrendChart, no ScanProgress, no useWebSocket — removed from scope
 │
 ├── rules/                             ← Security rules catalog
 │   └── rules-catalog.json             ← All 20+ rules with metadata
@@ -201,19 +238,19 @@ d:\AWS\AWS_account_projects\
 │   ├── seed_demo_data.py              ← Pre-populate DynamoDB with sample scans
 │   └── billing_check.py               ← Check current month AWS cost via Cost Explorer
 │
-├── fargate/                           ← Fargate OSS scanner container
-│   ├── Dockerfile
-│   ├── scanner_runner.py              ← Runs Checkov, pushes results to SQS
-│   └── requirements.txt
+├── fargate/                           ← Checkov OSS scanner ECS task (SEPARATE image from scanner/)
+│   ├── Dockerfile                     ← FROM python:3.12-slim + checkov install (~500MB)
+│   ├── scanner_runner.py              ← Downloads IaC from S3, runs checkov, pushes to SQS
+│   └── requirements.txt               ← checkov, boto3 only
 │
 └── .github/
     ├── workflows/
     │   ├── 01-pr-checks.yml           ← On every PR: pytest + cfn-lint + tfsec + Checkov
     │   ├── 02-deploy-infra.yml        ← On push to main: upload CFN to S3 → deploy stacks in sequence
-    │   ├── 03-deploy-lambdas.yml      ← On push to scanner/ api/ ai-engine/: zip → S3 → Lambda update
+    │   ├── 03-deploy-lambdas.yml      ← On push to scanner/ api/ ai-engine/: Docker build → ECR push → Lambda image update
     │   ├── 04-deploy-frontend.yml     ← On push to frontend/: build → S3 sync → CloudFront invalidate
     │   ├── 05-deploy-fargate.yml      ← On push to fargate/: Docker build → ECR push → task def update
-    │   └── 06-promote-to-prod.yml     ← Manual trigger only: promotes staging → prod with approval gate
+    │   └── 06-hotfix-to-prod.yml      ← Manual trigger only: emergency hotfix bypasses staging, double approval gate
     └── actions/
         └── aws-deploy/
             └── action.yml             ← Reusable action: assume OIDC role + set AWS creds
@@ -274,7 +311,7 @@ GOAL: All shared AWS resources (storage, auth, encryption, IAM)
       exist in the account. No application code yet.
 
 ACCEPTANCE CRITERIA:
-  ✓ aws dynamodb list-tables → shows scan-jobs, findings, rules-catalog, ws-connections
+  ✓ aws dynamodb list-tables → shows scan-jobs, findings, rules-catalog (ws-connections removed — WebSocket out of scope)
   ✓ aws s3 ls | grep guardrail → shows 5 buckets
   ✓ aws ssm get-parameters-by-path --path /guardrail → returns ≥ 5 parameters
   ✓ aws kms list-keys → includes the project KMS key
@@ -295,7 +332,8 @@ START COMMANDS:
           scan-reports: S3 Intelligent Tiering (IA after 30d, Archive after 90d)
           iac-uploads: lifecycle delete after 30d, ObjectCreated → EventBridge
           lambda-packages: lifecycle delete after 30d
-        DynamoDB tables (4): scan-jobs, findings, rules-catalog, ws-connections
+        DynamoDB tables (3): scan-jobs, findings, rules-catalog
+          NOTE: ws-connections table removed — WebSocket is out of scope
           All: PAY_PER_REQUEST billing, KMS-encrypted, TTL=90days (except rules-catalog)
           scan-jobs GSI: status-index (PK:status, SK:created_at)
           findings GSI: severity-index (PK:severity, SK:scan_job_id)
@@ -355,8 +393,12 @@ START COMMANDS:
   [x] .github/workflows/03-deploy-lambdas.yml:
         Trigger: push to dev OR staging OR main, paths: scanner/**, api/**, ai-engine/**
         Resolves DEPLOY_ENV from branch name
-        Per changed Lambda: pip install → zip → s3 cp
-                            → lambda update-function-code (name: guardrail-{fn}-$DEPLOY_ENV)
+        Per changed service (Docker image approach — NO zip packages):
+          docker build -t guardrail-{service} {dir}/
+          aws ecr get-login-password | docker login {ecr-uri}
+          docker tag → push: {ecr-uri}:$DEPLOY_ENV-{git-sha} AND {ecr-uri}:$DEPLOY_ENV-latest
+          aws lambda update-function-code --image-uri {ecr-uri}:$DEPLOY_ENV-{git-sha}
+            (Lambda functions only — ECS tasks updated via task def revision in 05-deploy-fargate.yml)
         GitHub Environment gate: prod requires approval
   [x] .github/workflows/04-deploy-frontend.yml:
         Trigger: push to dev OR staging OR main, paths: frontend/**
@@ -464,10 +506,12 @@ START COMMANDS:
 
   INFRASTRUCTURE (update scanner-stack.ts):
   [x] infrastructure/lib/scanner-stack.ts — full stack:
-        Lambda: ingest-handler (256MB, 30s) + rules-engine (512MB, 300s) + aggregator (256MB, 60s)
-        EventBridge rule (default bus): S3 ObjectCreated → ingest-handler
-        EventBridge rule (custom bus): ScanRequested → rules-engine + Fargate
-        SQS: checkov-results queue + DLQ; Fargate ECS cluster + task def; ECR repo
+        Lambda (container images): ingest-handler (256MB, 30s) + aggregator (256MB, 60s)
+        ECS Fargate tasks: rules-engine-task (0.5vCPU, 1GB) + checkov-task (0.25vCPU, 512MB)
+        NOTE: rules-engine is ECS task NOT Lambda — see KNOWN DECISIONS
+        EventBridge rule (default bus): S3 ObjectCreated → ingest-handler Lambda
+        EventBridge rule (custom bus): ScanRequested → rules-engine ECS RunTask + checkov ECS RunTask
+        SQS: checkov-results queue + DLQ; ECS Cluster: guardrail-cluster
         Grant ingest-handler: DynamoDB write on scan-jobs, EventBridge PutEvents
   [x] infrastructure/lib/foundation-stack.ts: added EventBus guardrail-events-${env}, exported
   [x] infrastructure/bin/app.ts: ScannerStack wired with correct props + addDependency(foundation)
@@ -497,15 +541,19 @@ START COMMANDS:
   [x] scanner/src/parsers/cloudformation_parser.py:
         Input: S3 object bytes  Output: dict of {ResourceType: {LogicalId: Properties}}
         Uses cfn-flip (handles both JSON and YAML CFN).
-  [x] scanner/src/handlers/rules_engine.py Lambda:
-        Triggered by: EventBridge ScanRequested
-        1. Load rules from DynamoDB rules-catalog (enabled=true only)
-        2. Download IaC file from S3
-        3. Parse based on iac_type (terraform_parser or cloudformation_parser)
-        4. Apply each rule → produce Finding objects where violations found
-        5. Write all findings to DynamoDB findings table
-        6. Update scan-jobs: status=SCANNING
-        7. Publish EventBridge: RulesEngineDone {scan_job_id, finding_count}
+  [x] scanner/src/controllers/scan_controller.py + scanner/src/services/scan_service.py:
+        Entry point: ECS Fargate task (MODE=rules_engine), NOT Lambda
+        Triggered by: ECS RunTask call from EventBridge ScanRequested rule
+        Receives: SCAN_JOB_ID, S3_KEY, IAC_TYPE as ECS container environment overrides
+        Flow (scan_controller → scan_service):
+          1. Load rules from DynamoDB rules-catalog (enabled=true only)
+          2. Download IaC file from S3 via s3_adapter
+          3. Parse via terraform_parser or cloudformation_parser (selected by IAC_TYPE)
+          4. Apply each rule → produce Finding objects where violations found
+          5. Write all findings to DynamoDB via dynamodb_adapter
+          6. Update scan-jobs: status=SCANNING
+          7. Publish EventBridge: RulesEngineDone {scan_job_id, finding_count}
+          8. Exit with code 0 (success) or non-zero (triggers failure_handler)
   [x] fargate/Dockerfile:
         FROM python:3.12-slim
         RUN pip install checkov boto3
@@ -517,23 +565,33 @@ START COMMANDS:
         Runs: checkov -f {file} --output json --quiet
         Parses Checkov JSON → Finding objects (maps checkov check_id to our rule_id where possible)
         Sends batch of findings to SQS queue: guardrail-checkov-results
-  [x] scanner/src/handlers/aggregator.py Lambda:
-        Triggered by: SQS guardrail-checkov-results
-        1. Read findings batch from SQS message
-        2. Deduplicate: if same resource+rule exists from rules_engine, skip
-        3. Write new findings to DynamoDB
-        4. Update scan-jobs: finding_counts={CRITICAL:n, HIGH:n, MEDIUM:n, LOW:n}, status=COMPLETE
-        5. Publish EventBridge: ScanComplete {scan_job_id, risk_score_raw}
+  [x] scanner/src/controllers/aggregator_controller.py + scanner/src/services/aggregation_service.py:
+        Entry point: Lambda container image (MODE=aggregator), triggered by SQS guardrail-checkov-results
+        Flow (aggregator_controller → aggregation_service):
+          1. Read findings batch from SQS message body
+          2. Deduplicate: if same resource+rule already written by rules-engine → skip
+          3. Write net-new findings to DynamoDB via dynamodb_adapter
+          4. Update scan-jobs: finding_counts={CRITICAL:n, HIGH:n, MEDIUM:n, LOW:n}, status=COMPLETE
+          5. Publish EventBridge: ScanComplete {scan_job_id, finding_count}
   [x] scanner/requirements.txt: add python-hcl2, cfn-flip
 
   INFRASTRUCTURE (complete scanner-stack.ts):
-  [x] Lambda: rules-engine (512MB, 300s, EventBridge ScanRequested trigger)
-  [x] Lambda: aggregator (256MB, 60s, SQS trigger)
+  [x] ECR repo: guardrail-ingest-{env}        (ingest-handler Lambda — Dockerfile: scanner/ingest/)
+  [x] ECR repo: guardrail-aggregator-{env}    (aggregator Lambda    — Dockerfile: scanner/aggregator/)
+  [x] ECR repo: guardrail-rules-engine-{env}  (rules-engine ECS     — Dockerfile: scanner/rules_engine/)
+  [x] ECR repo: guardrail-checkov-{env}       (checkov ECS          — Dockerfile: fargate/)
+  [x] Lambda: ingest-handler (DockerImageFunction, guardrail-ingest ECR, 256MB, 30s)
+  [x] Lambda: aggregator (DockerImageFunction, guardrail-aggregator ECR, 256MB, 60s, SQS trigger)
+  [x] ECS Fargate task def: rules-engine (guardrail-rules-engine ECR, 0.5 vCPU, 1GB)
+  [x] ECS Fargate task def: checkov (guardrail-checkov ECR, 0.25 vCPU, 512MB)
   [x] SQS queue: guardrail-checkov-results + DLQ (maxReceiveCount=3)
-  [x] ECS Cluster: guardrail-cluster
-  [x] Fargate task definition: guardrail-scanner (0.25 vCPU, 512MB, ECR image)
-  [x] EventBridge rule: ScanRequested → rules-engine Lambda AND ECS RunTask (Fargate)
-  [x] ECR repo + first Docker image pushed via 05-deploy-fargate.yml
+  [x] ECS Cluster: guardrail-cluster — VPC: public subnets only, natGateways=0, assignPublicIp=true on tasks
+  [x] scanner/Dockerfile: FROM public.ecr.aws/lambda/python:3.12 (single image for Lambda + ECS)
+  [x] EventBridge rule: ScanRequested → rules-engine ECS RunTask AND checkov ECS RunTask (both Fargate)
+  [ ] ECR images NOT yet pushed — required before Lambda or ECS task can run:
+        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account}.dkr.ecr.us-east-1.amazonaws.com
+        docker build -t guardrail-scanner scanner/ && docker tag guardrail-scanner:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest && docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
+        docker build -t guardrail-checkov fargate/ && docker tag guardrail-checkov:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-checkov-dev:dev-latest && docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-checkov-dev:dev-latest
 
   TESTS:
   [x] scanner/tests/test_terraform_parser.py: 5 tests (valid, empty, nested, multi-resource, malformed)
@@ -589,7 +647,10 @@ START COMMANDS:
 
   INFRASTRUCTURE:
   [ ] infrastructure/lib/ai-stack.ts:
-        Lambda: ai-analyzer (512MB, 300s)
+        Lambda: ai-analyzer (guardrail-ai-engine ECR image, 512MB, 300s)
+        Plain env vars: FINDINGS_TABLE, SCAN_JOBS_TABLE, EVENT_BUS_NAME,
+                        BEDROCK_EXPLAIN_MODEL=anthropic.claude-haiku-4-5-20251001,
+                        BEDROCK_FIX_MODEL=anthropic.claude-sonnet-4-6
         IAM: bedrock:InvokeModel on Haiku ARN + Sonnet ARN only (not *)
         EventBridge rule: ScanComplete → ai-analyzer Lambda
 
@@ -602,157 +663,311 @@ START COMMANDS:
 ═══════════════════════════════════════════════════════════════
 PHASE 7: API Layer
 ═══════════════════════════════════════════════════════════════
-GOAL: All application data is accessible via authenticated REST API
-      and scan progress is streamed via WebSocket.
+GOAL: All application data is accessible via authenticated REST API.
+      No WebSocket — email is the async completion notification.
+      UI polls for status or user opens dashboard after receiving email.
 
 ACCEPTANCE CRITERIA:
   ✓ curl -X POST /v1/scans (with JWT) → returns {presigned_url, scan_job_id}
-  ✓ curl GET /v1/dashboard/summary → returns {risk_score, finding_counts, trend:[7 items]}
-  ✓ WebSocket client receives ≥ 3 progress events during a scan (QUEUED, SCANNING, AI_COMPLETE)
+  ✓ curl GET /v1/scans → returns paginated list of all scans (status, filename, risk_score)
+  ✓ curl GET /v1/scans/{id} → returns full scan detail + all findings with ai_explanation
+  ✓ curl GET /v1/scans/{id}/report → returns presigned S3 URL to PDF (valid 15 min)
   ✓ Request without JWT → 401 Unauthorized
   ✓ pytest api/tests/ → all pass
 
 START COMMANDS:
-  mkdir -p api/src/routes api/src/middleware api/src/websocket api/tests
+  mkdir -p api/src/routes api/src/middleware api/tests
 
   CODE:
   [ ] api/src/middleware/auth.py:
         Validates Cognito JWT using python-jose
         Raises 401 if token missing, expired, or wrong issuer
-  [ ] api/src/middleware/cors.py: CORS headers allowing CloudFront domain
+  [ ] api/src/middleware/cors.py: CORS headers allowing CloudFront domain only
   [ ] api/src/routes/scans.py:
-        POST /v1/scans: generate S3 presigned PUT URL (expires 5min), create QUEUED DDB record
-        GET  /v1/scans: list scans for current user (paginated, max 50, sorted by created_at desc)
-        GET  /v1/scans/{id}: full scan details including all findings
-  [ ] api/src/routes/findings.py:
-        GET /v1/findings: filter by scan_job_id, severity, dismissed=true/false
-  [ ] api/src/routes/dashboard.py:
-        GET /v1/dashboard/summary: current risk_score, finding_counts, 7-day trend array
+        POST /v1/scans: generate S3 presigned PUT URL (expires 5 min), create QUEUED DDB record
+        GET  /v1/scans: list all scans (paginated, max 50, sorted created_at desc)
+                        Returns: scan_job_id, file_name, status, risk_score, finding_counts, created_at
+        GET  /v1/scans/{id}: full scan detail
+                        Returns: all scan fields + findings[] with rule_id, severity, resource_name,
+                                 line_number, ai_explanation, ai_fix_code
   [ ] api/src/routes/reports.py:
-        GET /v1/scans/{id}/report: S3 presigned GET URL for PDF (Phase 11 generates PDF)
-  [ ] api/src/websocket/connection_handler.py:
-        $connect: save {connectionId, scan_job_id} to ws-connections DDB table
-        $disconnect: delete connectionId from ws-connections
-        Outbound: ai-analyzer Lambda calls API GW Management API to push progress events
+        GET /v1/scans/{id}/report: generate presigned S3 GET URL for PDF (expires 15 min)
+                                   404 if report not yet generated
   [ ] api/requirements.txt: boto3, python-jose[cryptography]
 
   INFRASTRUCTURE:
   [ ] infrastructure/lib/api-stack.ts:
         API Gateway REST API (regional, Cognito User Pool authorizer)
-        API Gateway WebSocket API (route selection: action field)
-        Lambda: api-handler (256MB, 29s) integrated with all REST routes
-        Lambda: websocket-handler (128MB, 29s) for $connect/$disconnect
-        SSM: /guardrail/api-url, /guardrail/websocket-url
+        Lambda: api-handler (guardrail-api ECR image, 256MB, 29s) — all routes in one function
+        SSM: /guardrail/{env}/api-url
+        No WebSocket API — removed from scope (email is the notification mechanism)
 
   TESTS:
-  [ ] api/tests/test_scans.py: 4 tests (POST success, GET list, GET by id, no-auth-401)
-  [ ] api/tests/test_dashboard.py: 3 tests (summary shape, empty state, 7-day trend)
-  [ ] api/tests/test_websocket.py: 3 tests (connect saves DDB, disconnect removes, message format)
-  [ ] VERIFY: deploy to dev → Postman runs all 7 endpoints successfully
+  [ ] api/tests/test_scans.py: 5 tests (POST success, GET list, GET by id, GET report url, no-auth-401)
+  [ ] api/tests/test_middleware.py: 3 tests (valid JWT passes, expired JWT 401, missing JWT 401)
+  [ ] VERIFY: deploy to dev → Postman runs all 5 endpoints successfully
 
 ═══════════════════════════════════════════════════════════════
 PHASE 8: Frontend Dashboard
 ═══════════════════════════════════════════════════════════════
-GOAL: A browser-accessible dashboard shows Risk Score, findings with
-      AI explanations, scan history, and lets users upload IaC files.
+GOAL: Static React site hosted on S3 + CloudFront. Two views:
+      (1) Scan list — all IaC files processed with status + risk score
+      (2) Scan detail — full report for selected file with findings,
+          AI explanations, and PDF download.
+      User reaches the site after receiving the completion email, or
+      can upload a new file from the list page.
+
+USER FLOW:
+  Login (Cognito) → Scan List page → click any scan → Scan Detail page
+                                                           ├─ Risk Score meter
+                                                           ├─ Findings table (CRITICAL first)
+                                                           ├─ Click finding → AI explanation drawer
+                                                           └─ "Download PDF Report" button
 
 ACCEPTANCE CRITERIA (must test in browser — not just build):
-  ✓ CloudFront URL loads Login page
-  ✓ Login with Cognito credentials succeeds, lands on Dashboard
-  ✓ Drag-drop demo-master-bad.tf → progress bar animates → scan results appear
-  ✓ Risk Score meter shows correct color (RED for demo file)
-  ✓ Click CRITICAL finding → AI explanation panel slides open with explanation text
-  ✓ Click "View Fix" → code block shows Bedrock-generated corrected IaC
-  ✓ Trend chart renders 7 data points
+  ✓ CloudFront URL loads Login page; unauthenticated access redirects to Login
+  ✓ Login with Cognito credentials → lands on Scan List page
+  ✓ Scan List shows all scans: filename, status badge, risk score, date
+  ✓ Drag-drop demo-master-bad.tf on Scan List → "Scan queued" confirmation appears
+  ✓ Click any COMPLETE scan → navigates to Scan Detail page
+  ✓ Scan Detail: Risk Score meter shows correct color (RED if score > 60)
+  ✓ Scan Detail: Findings table sorted CRITICAL first, shows rule_id + resource_name
+  ✓ Click finding row → AI explanation drawer slides in with ai_explanation text
+  ✓ For CRITICAL/HIGH findings: "View Fix" button shows ai_fix_code in code block
+  ✓ "Download PDF Report" button triggers presigned URL download of PDF
   ✓ Lighthouse performance score ≥ 80
 
 START COMMANDS:
   cd frontend
   npm create vite@latest . -- --template react-ts
-  npm install tailwindcss @shadcn/ui recharts @tanstack/react-query axios aws-amplify
+  npm install tailwindcss @shadcn/ui @tanstack/react-query axios aws-amplify react-dropzone
 
   CODE:
-  [ ] src/lib/env.ts: typed env object (VITE_API_URL, VITE_WS_URL, VITE_COGNITO_USER_POOL_ID,
+  [ ] src/lib/env.ts: typed env object (VITE_API_URL, VITE_COGNITO_USER_POOL_ID,
         VITE_COGNITO_CLIENT_ID, VITE_COGNITO_IDENTITY_POOL_ID)
+        Note: no VITE_WS_URL — WebSocket removed from scope
   [ ] src/lib/api.ts: Axios instance, baseURL=VITE_API_URL,
-        interceptor: attach Cognito JWT to every request Authorization header
+        interceptor: attach Cognito JWT to Authorization header on every request
   [ ] src/lib/auth.ts: Amplify v6 wrapper (signIn, signOut, getCurrentUser, getIdToken)
-  [ ] pages/Login.tsx: email + password form, calls auth.signIn, redirects to Dashboard
-  [ ] components/RiskScoreMeter.tsx:
-        Circular gauge (SVG), score 0-100
-        0-30: green, 31-60: orange, 61-80: red, 81-100: dark red
-        Shows score number + label (Low/Medium/High/Critical Risk)
-  [ ] components/FindingsTable.tsx:
-        Columns: Severity badge, Rule ID, Resource Name, Line Number, Actions
-        Sortable by severity (CRITICAL first), filterable by category
-        Row actions: "View Fix" button, "Dismiss" button
-  [ ] components/TrendChart.tsx:
-        Recharts LineChart, X-axis=date (7 days), Y-axis=risk_score
-        Color matches current risk level
-  [ ] components/AiExplanationPanel.tsx:
-        Slide-in drawer (right side), triggered by "View Fix" button
-        Shows: finding details, ai_explanation paragraph, ai_fix_code with syntax highlight
-  [ ] components/ScanUploader.tsx:
-        Drag-and-drop zone (react-dropzone)
-        On drop: POST /v1/scans → get presigned URL → PUT file to S3
-        Shows file name + "Scan queued" confirmation
-  [ ] components/ScanProgress.tsx:
-        Connects to WebSocket (useWebSocket hook)
-        Renders stepper: QUEUED → SCANNING → AI_ANALYSIS → COMPLETE
-        Shows percentage and current step label
-  [ ] hooks/useWebSocket.ts: manages WebSocket connection lifecycle
-  [ ] hooks/useScans.ts: React Query hooks for all scan-related API calls
-  [ ] pages/Dashboard.tsx: assembles RiskScoreMeter + FindingsTable + TrendChart + ScanUploader
-  [ ] pages/ScanHistory.tsx: paginated list of past scans with risk scores
+  [ ] src/hooks/useScans.ts: React Query hooks
+        useScans()        → GET /v1/scans (list, auto-refetch every 30s)
+        useScan(id)       → GET /v1/scans/{id} (detail + findings)
+        useReportUrl(id)  → GET /v1/scans/{id}/report (presigned URL)
+        useCreateScan()   → POST /v1/scans mutation (returns presigned upload URL)
+
+  [ ] src/pages/LoginPage.tsx:
+        Email + password form → auth.signIn() → redirect to /scans on success
+        Shows error message on wrong credentials
+
+  [ ] src/pages/ScanListPage.tsx:
+        Header: "Security Guardrail Auditor" + sign-out button + "Upload New File" zone
+        ScanUploader component (drag-drop or click-to-browse)
+        Table: filename | status badge | risk score chip | date | "View Report" link
+        Status badges: QUEUED (grey), SCANNING (blue), AI_ANALYSIS (purple), COMPLETE (green), FAILED (red)
+        Risk score chip color matches RiskScoreMeter thresholds
+        Empty state: "No scans yet — upload an IaC file above to get started"
+
+  [ ] src/pages/ScanDetailPage.tsx:
+        Back link → /scans
+        Header: filename + scan date + "Download PDF Report" button (calls useReportUrl, opens URL)
+        Left column: RiskScoreMeter (large, centered)
+        Right column: finding_counts breakdown (CRITICAL N | HIGH N | MEDIUM N | LOW N)
+        Below: FindingsTable
+        Slide-in drawer: AiExplanationPanel (opens when finding row clicked)
+
+  [ ] src/components/ScanUploader.tsx:
+        react-dropzone zone, accepts .tf .hcl .yaml .json .template only
+        On drop: useCreateScan() → POST /v1/scans → PUT file to S3 presigned URL
+        Shows filename + "Scan queued — you will receive an email when complete"
+
+  [ ] src/components/RiskScoreMeter.tsx:
+        SVG circular gauge, score 0–100
+        0–30: green ("Low Risk"), 31–60: amber ("Medium Risk"),
+        61–80: red ("High Risk"), 81–100: dark red ("Critical Risk")
+        Displays numeric score + label
+
+  [ ] src/components/FindingsTable.tsx:
+        Columns: Severity badge | Rule ID | Resource Name | Line # | Category | Actions
+        Default sort: CRITICAL → HIGH → MEDIUM → LOW
+        Filter bar: "All" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
+        Row click → opens AiExplanationPanel
+        "View Fix" button (CRITICAL/HIGH only) → shows fix tab in panel
+
+  [ ] src/components/AiExplanationPanel.tsx:
+        Slide-in drawer (right side, 480px wide)
+        Tab 1 "Explanation": ai_explanation text + finding metadata
+        Tab 2 "Fix" (CRITICAL/HIGH only): ai_fix_code in syntax-highlighted code block with copy button
+        Close button (X) or click outside
 
   INFRASTRUCTURE:
   [ ] infrastructure/lib/frontend-stack.ts:
-        S3 bucket: dashboard (no public access)
+        S3 bucket: guardrail-dashboard-{env}-{account} (private, no public access, versioning off)
         CloudFront OAC (Origin Access Control — NOT OAI, OAI is deprecated)
-        CloudFront distribution: HTTPS only, cache policy, error page → index.html
-        SSM: /guardrail/cloudfront-dist-id (needed by demo_sleep.py)
+        CloudFront distribution: HTTPS only, default root index.html,
+                                 custom error: 403/404 → /index.html (SPA routing)
+        SSM: /guardrail/{env}/cloudfront-dist-id, /guardrail/{env}/cloudfront-url
   [ ] GitHub Actions 04-deploy-frontend.yml: fetches VITE_* values from SSM during build
 
-  VERIFY: test all 8 acceptance criteria in a real browser before marking done
+  VERIFY: test all 11 acceptance criteria in a real browser before marking phase done
 
 ═══════════════════════════════════════════════════════════════
-PHASE 9: Notifications & Observability
+PHASE 9: Email Notifications & Observability
 ═══════════════════════════════════════════════════════════════
-GOAL: Critical scan results alert via email and Slack. System health
-      is visible in CloudWatch. Every Lambda is traced in X-Ray.
+GOAL: User receives an email on every scan completion containing:
+      - A CRITICAL/HIGH-only summary in the email body
+      - Full PDF report as email attachment
+      Slack/Teams notifications are OUT OF SCOPE for this demo.
+      System health visible in CloudWatch. All Lambdas traced in X-Ray.
+
+EMAIL SPEC:
+  Trigger:   EventBridge ReportGenerated event (after PDF is ready in S3)
+  To:        puneetkumarsingh765@gmail.com  ← HARDCODED for this demo
+  From:      puneetkumarsingh765@gmail.com  ← SES verified identity (same address, SES sandbox OK)
+  Subject:   "Scan Complete: {file_name} — Risk Score {risk_score}/100"
+  SES Note:  SES sandbox only allows sending to verified addresses. Both From and To are the same
+             verified address — no production access request needed for this demo.
+  Body (plain text + HTML):
+    "Your IaC file '{file_name}' has been scanned.
+     Risk Score: {risk_score}/100 ({label})
+
+     Issues Requiring Attention ({critical_count} CRITICAL, {high_count} HIGH):
+     ─────────────────────────────────────────
+     [CRITICAL] S3-001 — aws_s3_bucket.my_bucket — Public ACL detected (line 12)
+     [CRITICAL] SG-001 — aws_security_group.web — SSH open to 0.0.0.0/0 (line 34)
+     [HIGH]     IAM-001 — aws_iam_policy.admin — Wildcard action (*) in policy (line 8)
+     ─────────────────────────────────────────
+     MEDIUM and LOW findings, and all compliant resources, are in the attached PDF.
+     View full report: {cloudfront_url}/scans/{scan_job_id}"
+  Attachment: {scan_job_id}-report.pdf (from S3 scan-reports bucket)
+  IMPORTANT: Do NOT include MEDIUM/LOW findings in email body.
+             Do NOT mention compliant/passing resources in email body.
+             Full detail (all severities) is ONLY in the PDF attachment.
 
 ACCEPTANCE CRITERIA:
-  ✓ Upload demo-master-bad.tf → Slack message received within 2 minutes
-  ✓ CloudWatch dashboard shows scan-volume, lambda-errors, bedrock-latency widgets
-  ✓ X-Ray traces visible for a complete scan flow (ingest → scan → AI → API)
-  ✓ Billing alarm tested: manually set threshold to $0.01, verify email received, then restore $20
+  ✓ Upload demo-master-bad.tf → email received within 3 minutes of scan completing
+  ✓ Email body contains only CRITICAL + HIGH findings (no MEDIUM/LOW, no passing resources)
+  ✓ PDF attachment opens correctly and contains full report (all severities)
+  ✓ CloudWatch dashboard shows scan-volume + Lambda error rates
+  ✓ X-Ray traces visible for ingest → rules-engine → AI → report → email flow
+  ✓ Billing alarm tested: set to $0.01, verify email, restore to $20
 
 START COMMANDS:
-  # All work in infrastructure/lib/monitoring-stack.ts and new Lambda files
+  mkdir -p scanner/src/report_generator
 
+  CODE:
+  [ ] scanner/src/report_generator/pdf_generator.py:
+        Input: scan_job dict + findings list (all severities)
+        Uses reportlab or weasyprint to generate PDF
+        Sections: Cover (filename, date, risk score), Executive Summary,
+                  CRITICAL findings, HIGH findings, MEDIUM findings, LOW findings,
+                  Compliant Resources (grouped by category)
+        Output: bytes → caller uploads to S3
+
+  [ ] scanner/src/handlers/report_handler.py Lambda:
+        Triggered by: EventBridge AIAnalysisComplete
+        1. Read scan_job from DDB (scan-jobs table)
+        2. Read all findings from DDB (findings table, query by scan_job_id)
+        3. Call pdf_generator.generate(scan_job, findings) → PDF bytes
+        4. Upload PDF to S3: scan-reports/{scan_job_id}/report.pdf
+        5. Update scan-jobs: report_s3_key = "scan-reports/{scan_job_id}/report.pdf"
+        6. Publish EventBridge: ReportGenerated {scan_job_id, report_s3_key, user_email}
+
+  [ ] scanner/src/handlers/email_handler.py Lambda:
+        Handles TWO event types — success and failure — distinguished by EMAIL_TYPE env var
+        set per EventBridge rule (one rule → ReportGenerated, one rule → ScanFailed).
+
+        SUCCESS PATH (EMAIL_TYPE=success, triggered by ReportGenerated):
+          1. Fetch secrets (ses_from_email, ses_to_email) from Secrets Manager via APP_SECRETS_ARN
+          2. Read scan_job from DDB
+          3. Read findings — CRITICAL + HIGH only from DDB
+          4. Download PDF from S3 (scan_job.report_s3_key)
+          5. Build MIME email:
+               Subject: "Scan Complete: {file_name} — Risk Score {risk_score}/100"
+               Body: CRITICAL+HIGH finding lines only (rule_id | resource | line)
+                     Footer: link to dashboard + "Full detail in attached PDF"
+               Attachment: {scan_job_id}-report.pdf
+          6. SES send_raw_email()
+          7. Log: {event: success_email_sent, scan_job_id}
+
+        FAILURE PATH (EMAIL_TYPE=failure, triggered by ScanFailed):
+          1. Fetch secrets from Secrets Manager
+          2. Read scan_job from DDB (status=FAILED, failed_stage, error_message, trace_id)
+          3. Build plain-text email (no PDF — report was never generated):
+               Subject: "SCAN FAILED: {file_name} — Developer Attention Required"
+               Body:
+                 File: {file_name} | Scan ID: {scan_job_id}
+                 Failed at: {failed_stage}
+                 Error: {error_message}
+                 Debug:
+                   CloudWatch Logs: /guardrail/{env}/ecs/{failed_stage}
+                   X-Ray Trace: {trace_id}
+                   DynamoDB: scan-jobs-{env} PK={scan_job_id}
+                 No report was generated. Resubmit after the bug is fixed.
+          4. SES send_raw_email()
+          5. Log: {event: failure_email_sent, scan_job_id, failed_stage}
+
+  [ ] scanner/src/handlers/failure_handler.py Lambda:
+        Triggered by TWO sources:
+          a) EventBridge rule: ECS TaskStopped where detail.containers[].exitCode != 0
+          b) CloudWatch Alarm on SQS DLQ (checkov-results-dlq) depth > 0 → SNS → this Lambda
+        Steps:
+          1. Extract scan_job_id from event (ECS task tags or DLQ message body)
+          2. Identify failed_stage from event source (rules-engine-task or checkov-task)
+          3. Update DDB scan-jobs: status=FAILED, failed_stage, error_message, trace_id
+          4. Publish EventBridge: ScanFailed {scan_job_id, failed_stage, error_message, trace_id}
+
+  [ ] scanner/src/services/email_service.py:
+        build_success_email(scan_job, crit_high_findings, pdf_bytes, cf_url) → MIMEMultipart
+        build_failure_email(scan_job) → MIMEMultipart
+        send_email(mime_msg, from_addr, to_addr) → None   (calls boto3 SES send_raw_email)
+
+  [ ] scanner/requirements.txt: add reportlab
+
+  INFRASTRUCTURE:
   [ ] infrastructure/lib/monitoring-stack.ts:
         CloudWatch Dashboard "GuardrailHealth":
-          Widget 1: scan-jobs completed per hour (DDB Streams metric or custom metric)
-          Widget 2: Lambda error rates (all functions)
+          Widget 1: scan completions per hour
+          Widget 2: Lambda + ECS task error rates
           Widget 3: Bedrock invocation latency p95
-          Widget 4: Fargate task failures
-        X-Ray: enable active tracing on ALL Lambda functions (update all Lambda defs)
-        Alarms → SNS topic guardrail-ops-alerts → email:
+        X-Ray: enable active tracing on ALL Lambda functions (update Lambda defs in all stacks)
+        Alarms → SNS guardrail-ops-alerts → email puneetkumarsingh765@gmail.com:
           Lambda error rate > 5% over 5 minutes
-          Fargate task exit code non-zero
+          ECS task exit code non-zero
           Bedrock p95 latency > 10 seconds
-  [ ] EventBridge rule: AIAnalysisComplete where risk_score > 80 → SNS guardrail-critical-alerts
-  [ ] SNS guardrail-critical-alerts → Lambda slack-notifier + Lambda teams-notifier
-  [ ] Lambda: slack-notifier (128MB, 10s):
-        Formats Slack Block Kit message: scan summary + risk score + CRITICAL count + dashboard URL
-        Posts to SLACK_WEBHOOK_URL from Secrets Manager (/guardrail/slack-webhook-url)
-  [ ] Lambda: teams-notifier (128MB, 10s):
-        Microsoft Teams Adaptive Card format (same data as Slack)
-        Posts to TEAMS_WEBHOOK_URL from Secrets Manager
-  [ ] Secrets Manager: /guardrail/slack-webhook-url (create a test Slack app + incoming webhook)
-  [ ] Secrets Manager: /guardrail/teams-webhook-url
+  [ ] infrastructure/lib/scanner-stack.ts additions:
+        Lambda: report-handler (guardrail-scanner ECR image, 512MB, 120s, MODE=report)
+        Lambda: email-handler (guardrail-scanner ECR image, 256MB, 30s, MODE=email)
+        EventBridge rule: AIAnalysisComplete → report-handler
+        EventBridge rule: ReportGenerated → email-handler
+        IAM: email-handler needs ses:SendRawEmail on arn:aws:ses:us-east-1:{account}:identity/puneetkumarsingh765@gmail.com
+        IAM: email-handler needs secretsmanager:GetSecretValue on guardrail/{env}/app-secrets ARN
+        IAM: report-handler needs s3:PutObject on scan-reports bucket
+        Secrets Manager secret (created in foundation-stack.ts, one per env):
+          Name:  guardrail/{env}/app-secrets
+          Value: {"ses_from_email":"puneetkumarsingh765@gmail.com","ses_to_email":"puneetkumarsingh765@gmail.com"}
+          KMS:   encrypted with project KMS key
+          Rotation: none (static demo config)
+        SSM parameters (non-sensitive config — stays in SSM as before):
+          /guardrail/{env}/cloudfront-url  = https://{dist-id}.cloudfront.net
 
-  VERIFY: run all 4 acceptance criteria
+  INFRASTRUCTURE additions (scanner-stack.ts):
+        Lambda: failure-handler (guardrail-scanner ECR image, 128MB, 30s, MODE=failure)
+        EventBridge rule: ECS TaskStopped exitCode≠0 → failure-handler
+        CloudWatch Alarm: checkov-results-dlq depth > 0 → SNS → failure-handler
+        EventBridge rule: ScanFailed → email-handler (EMAIL_TYPE=failure injected by rule)
+        EventBridge rule: ReportGenerated → email-handler (EMAIL_TYPE=success injected by rule)
+        IAM: failure-handler → dynamodb:UpdateItem on scan-jobs + events:PutEvents
+
+  TESTS:
+  [ ] scanner/tests/test_pdf_generator.py: 3 tests (bytes generated, all sections present, CRITICAL first)
+  [ ] scanner/tests/test_report_handler.py: 3 tests (PDF in S3, DDB updated, ReportGenerated published)
+  [ ] scanner/tests/test_email_handler.py: 6 tests
+        success path: body has CRITICAL line, body has HIGH line, body excludes MEDIUM/LOW, PDF attached
+        failure path: subject contains FAILED, body has failed_stage + error, no PDF attached
+  [ ] scanner/tests/test_failure_handler.py: 3 tests
+        ECS exit≠0 → DDB status=FAILED, ScanFailed published, failed_stage correctly identified
+
+  VERIFY: run all 6 acceptance criteria
 
 ═══════════════════════════════════════════════════════════════
 PHASE 10: Demo Lifecycle & README
@@ -792,7 +1007,7 @@ START COMMANDS:
   [ ] README.md (client-facing, public):
         1-paragraph project description (plain English, no jargon)
         Architecture diagram (ASCII)
-        Key capabilities: 20+ security rules, AI explanations, real-time progress, Slack alerts
+        Key capabilities: 20+ security rules, AI explanations, email PDF report, Risk Score dashboard
         Tech stack badges (AWS CDK, Python, React, Bedrock)
         How to deploy: 3 commands (clone, cdk bootstrap, push to GitHub)
         Cost breakdown table (idle vs active)
@@ -826,7 +1041,10 @@ ACCEPTANCE CRITERIA:
         encrypted-volumes, iam-no-inline-policy
   [ ] Security Hub enabled: AWS Foundational Security Best Practices standard
   [ ] Lambda reserved concurrency set per function (prevents runaway cost):
-        rules-engine: 10, ai-analyzer: 5, api-handler: 20, others: 5
+        ai-analyzer: 5, api-handler: 20, ingest-handler: 10, aggregator: 10,
+        report-handler: 5, email-handler: 5, failure-handler: 5
+        NOTE: rules-engine and checkov are ECS tasks — concurrency controlled by
+              EventBridge RunTask rate limits, not Lambda concurrency
   [ ] API Gateway throttling: 1000 req/s burst, 500 req/s steady per stage
   [ ] SQS dead-letter queue: alarm on DLQ message count > 0
   [ ] Run checkov on infrastructure/cdk.out/ → fix all CRITICAL + HIGH findings
@@ -843,26 +1061,42 @@ ACCEPTANCE CRITERIA:
 **MOST RECENT SESSION: June 28, 2026**
 
 ### What Was Completed This Session
-- Phase 5 Scanning Engine — CODE COMPLETE. PR #9 open → dev. 32 tests, 73% coverage, --cov-fail-under=70 PASSED.
-  - scanner/src/parsers/terraform_parser.py: python-hcl2 HCL parser → {resource_type: {name: attrs}}
-  - scanner/src/parsers/cloudformation_parser.py: cfn-flip YAML/JSON parser → {ResourceType: {LogicalId: props}}
-  - scanner/src/handlers/rules_engine.py: EventBridge ScanRequested Lambda — 20 security rules (S3/SG/IAM/ENC/LOG)
-  - scanner/src/handlers/aggregator.py: SQS-triggered Lambda — dedup findings, COMPLETE status, ScanComplete event
-  - fargate/Dockerfile + scanner_runner.py + requirements.txt: Checkov container (14 rule ID mappings)
-  - 4 test files: 32 tests total (5+5+9+3), 73% coverage
+- CLAUDE.md TOKEN EFFICIENCY PROTOCOL completely rewritten (2026-06-28):
+  - Haiku retired from Claude Code workflow — Sonnet 4.6 now handles ALL tasks inline
+  - Root cause: Haiku errors + retries cost more tokens than Sonnet one-shot execution
+  - ECR image missing bug documented in WHAT DEGRADES PERFORMANCE section
+  - prompts.md format updated (removed "Haiku agents" reference)
+  - KNOWN DECISIONS table updated with Sonnet 4.6 decision rationale
+  - COST GUARDRAILS clarified: Bedrock app engine keeps Haiku for explain_risk (different context)
+- Phase 5 code already complete (PR #9 open → dev). ECR image NOT yet pushed to ECR.
 
 ### NEXT SESSION MUST START HERE
-**Phase 5 — Verify acceptance criteria after PR #9 merges to dev**
+**Phase 5 — Fix ECR image + re-verify acceptance criteria**
 
-  1. Confirm PR #9 CI checks pass (pytest + cfn-lint + tfsec + checkov)
-  2. After PR merges: `aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{id}-dev/test.tf`
-  3. Poll: `aws dynamodb scan --table-name scan-jobs-dev` → status becomes COMPLETE
-  4. Check: `aws dynamodb query --table-name findings-dev --key-condition "scan_job_id=..."` → ≥5 items
-  5. Verify ≥1 finding has severity=CRITICAL
-  6. If all pass: mark Phase 5 VERIFY as [x] and begin Phase 6 — AI Analysis Engine
+  BLOCKER: ECS Fargate task fails because no Docker image exists in ECR.
+  Fix sequence:
+  1. Get AWS account ID: `aws sts get-caller-identity --query Account --output text`
+  2. Build + push Docker image manually:
+     ```
+     aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin {account}.dkr.ecr.us-east-1.amazonaws.com
+     docker build -t guardrail-scanner fargate/
+     docker tag guardrail-scanner:latest {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
+     docker push {account}.dkr.ecr.us-east-1.amazonaws.com/guardrail-scanner-dev:dev-latest
+     ```
+  3. Confirm PR #9 CI checks pass (pytest + cfn-lint + tfsec + checkov)
+  4. After PR merges: `aws s3 cp terraform-examples/bad/demo-master-bad.tf s3://guardrail-iac-uploads-{account}-dev/test.tf`
+  5. Poll: `aws dynamodb scan --table-name scan-jobs-dev` → status becomes COMPLETE
+  6. Check: `aws dynamodb query --table-name findings-dev --key-condition "scan_job_id=..."` → ≥5 items
+  7. Verify ≥1 finding has severity=CRITICAL
+  8. If all pass: mark Phase 5 VERIFY as [x] → proceed to Phase 6
 
 ### Session Log (reverse chronological)
 ```
+2026-06-28 | TOKEN EFFICIENCY PROTOCOL rewritten. Haiku retired from Claude Code workflow.
+             Sonnet 4.6 now handles ALL tasks inline — no subagents for routine work.
+             ECR image push blocker documented. Phase 5 VERIFY pending ECR fix.
+             CLAUDE.md: KNOWN DECISIONS + COST GUARDRAILS + SESSION TRACKER updated.
+
 2026-06-28 | Phase 5 Scanning Engine CODE COMPLETE. PR #9 open → dev.
              32 tests (5 parser + 5 cfn + 9 rules + 3 aggregator), 73% coverage.
              20 security rules implemented (S3/SG/IAM/ENC/LOG) in rules_engine.py.
@@ -1028,15 +1262,55 @@ Attributes:
 ]
 ```
 
-### Lambda Functions — Specs
+### Compute Deployment Rule — DOCKER IMAGES ONLY
 
-| Function | Runtime | Memory | Timeout | Trigger | Key Env Vars |
+Every Lambda function and every ECS task MUST be deployed as a Docker container image from ECR.
+No zip packages. No Lambda layers. No dependency trimming.
+
+```
+Deployment flow for ALL compute:
+  1. docker build -t guardrail-{service} {dir}/
+  2. docker tag → ECR push
+  3. Lambda: aws lambda update-function-code --image-uri {ecr-uri}:{tag}
+     ECS:    Register new task definition revision referencing {ecr-uri}:{tag}
+```
+
+ECR repositories (one per service):
+  guardrail-scanner-{env}     ← scanner/ image (ingest + rules-engine + aggregator — same image, MODE env var selects entry point)
+  guardrail-checkov-{env}     ← fargate/ image (Checkov OSS scanner — separate, 500MB+)
+  guardrail-ai-engine-{env}   ← ai-engine/ image (Bedrock analyzer Lambda)
+  guardrail-api-{env}         ← api/ image (REST + WebSocket handlers Lambda)
+
+### Lambda Functions — Specs (ALL use Lambda Container Images from ECR)
+
+`[plain]` = plain env var injected by CDK at deploy time (non-sensitive)
+`[secret]` = APP_SECRETS_ARN injected as plain var; code calls Secrets Manager at cold start to fetch actual value
+
+| Function | ECR Image (own repo per function) | Memory | Timeout | Trigger | Env Vars |
 |---|---|---|---|---|---|
-| ingest-handler | Python 3.12 | 256MB | 30s | S3 Event / API GW | SCAN_JOBS_TABLE, UPLOAD_BUCKET |
-| rules-engine | Python 3.12 | 512MB | 300s | EventBridge | FINDINGS_TABLE, RULES_TABLE |
-| ai-analyzer | Python 3.12 | 512MB | 300s | EventBridge | FINDINGS_TABLE, BEDROCK_MODEL_HAIKU, BEDROCK_MODEL_SONNET |
-| aggregator | Python 3.12 | 256MB | 60s | SQS | SCAN_JOBS_TABLE, FINDINGS_TABLE |
-| report-generator | Python 3.12 | 1024MB | 120s | EventBridge | REPORTS_BUCKET |
+| ingest-handler | guardrail-ingest-{env} | 256MB | 30s | EventBridge (S3 ObjectCreated) | [plain] SCAN_JOBS_TABLE, UPLOAD_BUCKET, EVENT_BUS_NAME |
+| aggregator | guardrail-aggregator-{env} | 256MB | 60s | SQS checkov-results | [plain] SCAN_JOBS_TABLE, FINDINGS_TABLE, EVENT_BUS_NAME |
+| ai-analyzer | guardrail-ai-engine-{env} | 512MB | 300s | EventBridge ScanComplete | [plain] FINDINGS_TABLE, SCAN_JOBS_TABLE, EVENT_BUS_NAME, BEDROCK_EXPLAIN_MODEL, BEDROCK_FIX_MODEL |
+| report-handler | guardrail-report-{env} | 512MB | 120s | EventBridge AIAnalysisComplete | [plain] FINDINGS_TABLE, SCAN_JOBS_TABLE, REPORTS_BUCKET, EVENT_BUS_NAME |
+| email-handler | guardrail-email-{env} | 256MB | 30s | EventBridge ReportGenerated OR ScanFailed | [plain] FINDINGS_TABLE, SCAN_JOBS_TABLE, REPORTS_BUCKET, CLOUDFRONT_URL, EMAIL_TYPE + [secret] APP_SECRETS_ARN→{ses_from_email, ses_to_email} |
+| failure-handler | guardrail-failure-{env} | 128MB | 30s | ECS TaskStopped (exitCode≠0) + SQS DLQ alarm | [plain] SCAN_JOBS_TABLE, EVENT_BUS_NAME |
+| api-handler | guardrail-api-{env} | 256MB | 29s | API GW REST | [plain] SCAN_JOBS_TABLE, FINDINGS_TABLE, RULES_TABLE, UPLOAD_BUCKET, REPORTS_BUCKET |
+
+### ECS Fargate Tasks — Specs (ALL use Docker Images from ECR)
+
+All ECS tasks use IAM roles for AWS access — no secrets needed.
+`*` = injected at RunTask time via ECS container environment overrides (per-invocation values).
+
+| Task | ECR Image (own repo per task) | vCPU | Memory | Trigger | Env Vars |
+|---|---|---|---|---|---|
+| rules-engine-task | guardrail-rules-engine-{env} | 0.5 | 1GB | EventBridge ScanRequested → ECS RunTask | [plain] SCAN_JOB_ID*, S3_KEY*, IAC_TYPE*, FINDINGS_TABLE, RULES_TABLE, UPLOAD_BUCKET, EVENT_BUS_NAME, MODE=rules_engine |
+| checkov-task | guardrail-checkov-{env} | 0.25 | 512MB | EventBridge ScanRequested → ECS RunTask | [plain] SCAN_JOB_ID*, S3_BUCKET*, S3_KEY*, SQS_QUEUE_URL |
+
+**Why rules-engine is ECS task (not Lambda):**
+- Heavy dependencies (python-hcl2, cfn-flip) → Docker image eliminates zip packaging problem
+- Consistent with Checkov task — both are ECS Fargate, same deployment pattern
+- Per-file processing: EventBridge fires one ScanRequested event per file → one ECS task per scan
+- Task receives SCAN_JOB_ID + S3_KEY as env vars, downloads file, scans, writes DDB, exits
 | api-handler | Python 3.12 | 256MB | 29s | API GW | All tables, UPLOAD_BUCKET |
 | websocket-handler | Python 3.12 | 128MB | 29s | API GW WS | CONNECTIONS_TABLE |
 | slack-notifier | Python 3.12 | 128MB | 10s | SNS | SLACK_WEBHOOK_URL (Secrets Mgr) |
@@ -1073,22 +1347,29 @@ def calculate_risk_score(findings: list[Finding]) -> int:
 # 81-100: DARK RED (Critical Risk)
 ```
 
-### API Gateway Endpoints
+### API Gateway Endpoints (REST only — WebSocket removed from scope)
 
 ```
-REST API (v1):
-  POST   /v1/scans                    → trigger new scan (upload to S3 presigned)
-  GET    /v1/scans                    → list scans (paginated, max 50)
-  GET    /v1/scans/{scan_job_id}      → get scan details + findings
-  GET    /v1/scans/{scan_job_id}/report → S3 presigned URL for PDF
-  PATCH  /v1/findings/{finding_id}   → dismiss a finding
-  GET    /v1/dashboard/summary        → Risk Score + counts + 7-day trend
-  GET    /v1/rules                    → list all rules in catalog
+REST API (v1) — 5 endpoints, all require Cognito JWT:
+  POST   /v1/scans                      → returns {presigned_url, scan_job_id}
+                                          Frontend PUTs file to presigned URL directly
+  GET    /v1/scans                      → list all scans, sorted created_at desc, max 50
+                                          Returns: [{scan_job_id, file_name, status,
+                                                    risk_score, finding_counts, created_at}]
+  GET    /v1/scans/{scan_job_id}        → full scan detail + all findings
+                                          Returns: scan fields + findings[] with
+                                                   rule_id, severity, resource_name,
+                                                   line_number, ai_explanation, ai_fix_code
+  GET    /v1/scans/{scan_job_id}/report → presigned S3 GET URL for PDF (15 min TTL)
+                                          Returns 404 if report not yet generated
+  All 4 above handled by single api-handler Lambda (guardrail-api ECR image)
 
-WebSocket API:
-  $connect    → store connectionId in DynamoDB
-  $disconnect → remove connectionId
-  scan-update → push: { scan_job_id, status, progress_pct, message }
+REMOVED from scope (do not implement):
+  PATCH  /v1/findings/{finding_id}  (dismiss finding)
+  GET    /v1/dashboard/summary      (trend chart removed)
+  GET    /v1/rules                  (not needed by UI)
+  WebSocket API                     (email is the async notification)
+  ws-connections DynamoDB table     (WebSocket removed)
 ```
 
 ---
@@ -1118,12 +1399,374 @@ WebSocket API:
 | State Mgmt | React Query (TanStack) | v5 | Server state, caching, websocket |
 | Testing (Python) | pytest + moto | latest | moto for AWS service mocking |
 | Testing (TS) | Vitest | latest | Vite-native, fast |
-| Container | Docker | latest | Fargate task |
+| Container base | python:3.12-slim | 3.12 | Debian: better apt packages, no opinionated ENTRYPOINT. Lambda compat via awslambdaric pip package. |
+| Lambda RIC | awslambdaric | >=2.0.0 | Makes python:3.12-slim Lambda-compatible. Replaces AWS base image. Must be in requirements.txt. |
 | Container Registry | ECR | — | AWS native |
 
 ---
 
 ## CODING STANDARDS (Claude Must Follow These)
+
+### Layered Architecture (SOLID — enforced in scanner/, ai-engine/, api/)
+
+Every service module MUST follow this layer order. Calls only flow downward — never skip layers.
+
+```
+main.py          ← Entry point only. Reads MODE env var, calls correct controller.
+controllers/     ← Event adapters. Parse raw event dict → typed params → call service.
+                   No business logic. No AWS calls. No exception handling beyond HTTP shape.
+services/        ← Business logic. Orchestrates adapters and rules. Raises domain exceptions.
+                   No boto3 here. Receives adapter interfaces via constructor injection.
+core/interfaces/ ← ABCs only. IParser.parse(bytes) → dict. IRule.apply(parsed, job_id) → list[Finding].
+                   Defines contracts — never implements them.
+core/models/     ← Dataclasses only. Finding, ScanJob. No methods that touch AWS.
+adapters/aws/    ← All boto3 calls live here and ONLY here.
+adapters/parsers/← Implements IParser. python-hcl2 and cfn-flip calls here.
+rules/           ← Implements IRule. One class per rule_id. apply() returns [] if no violation.
+```
+
+SOLID checklist (Claude must verify before writing any new file):
+- S (Single Responsibility): each file has one reason to change
+- O (Open/Closed): new parser or rule = new file, zero changes to existing files
+- L (Liskov): every IRule.apply() and IParser.parse() can be swapped without callers changing
+- I (Interface Segregation): IParser and IRule are minimal — no god interfaces
+- D (Dependency Inversion): services receive adapters via constructor, never instantiate boto3 directly
+
+### Docker Image Standards (ALL compute — Lambda and ECS)
+
+**LOCKED BASE IMAGE — Do not change without updating this section and KNOWN DECISIONS.**
+
+| Image | Used for | Why |
+|---|---|---|
+| `python:3.12-slim` | scanner/, ai-engine/, api/ | Debian: apt compatibility, no opinionated ENTRYPOINT, smaller than AL2 |
+| `python:3.12-slim` | fargate/ (Checkov) | Consistent across all images |
+| ~~`public.ecr.aws/lambda/python:3.12`~~ | ~~Never use~~ | Amazon Linux 2, ENTRYPOINT=/lambda-entrypoint.sh fights ECS, fewer apt packages |
+
+**Lambda compatibility without the AWS base image:**
+`python:3.12-slim` needs `awslambdaric` (AWS Lambda Runtime Interface Client) installed via pip.
+This is the SAME RIC that the AWS base image pre-installs — same Lambda behaviour, cleaner base.
+**Always include in requirements.txt:** `awslambdaric>=2.0.0`
+
+**No Mangum. Ever.** Mangum is an ASGI adapter for Flask/FastAPI frameworks.
+Our handlers are plain `def handler(event, context) -> dict` — native Lambda format.
+The RIC calls this directly. No adapter needed.
+
+#### Canonical Dockerfile (scanner/ and ai-engine/)
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+COPY __init__.py .
+
+# Default CMD — never executed directly in AWS.
+# Lambda overrides entrypoint+cmd via CDK imageConfig.
+# ECS overrides entryPoint via CDK container definition.
+CMD ["python", "-m", "src.main"]
+```
+
+#### CDK patterns — copy-paste exactly, never guess
+
+**Lambda DockerImageFunction — ALWAYS use this form, never lambda.Function:**
+```typescript
+new lambda.DockerImageFunction(this, "MyHandler", {
+  code: lambda.DockerImageCode.fromEcr(ecrRepo, {
+    tagOrDigest: `${env}-latest`,
+    entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],  // ← REQUIRED for slim image
+    cmd: ["src.handlers.my_handler.handler"],                      // ← dotted module.function path
+  }),
+  // memorySize, timeout, role, environment, tracing, logGroup ...
+});
+// NEVER use: new lambda.Function(..., { runtime: lambda.Runtime.PYTHON_3_12, code: lambda.Code.fromAsset(...) })
+// NEVER use: lambda.Code.fromAsset() — that is ZIP packaging, banned in this project
+```
+
+**ECS Fargate container — rules-engine and future ECS tasks:**
+```typescript
+taskDef.addContainer("rules-engine", {
+  image: ecs.ContainerImage.fromEcrRepository(ecrRepo, `${env}-latest`),
+  entryPoint: ["python", "-m", "src.main"],   // ← overrides any base image ENTRYPOINT
+  // no 'command' — src/main.py reads MODE env var
+  environment: { MODE: "rules_engine", FINDINGS_TABLE: "...", ... },
+});
+// ECS task receives per-invocation values (SCAN_JOB_ID, S3_KEY, IAC_TYPE)
+// via containerOverrides in the EventBridge EcsTask target, NOT in environment above
+```
+
+#### Runtime behaviour at a glance
+
+| Compute | Effective command | What runs |
+|---|---|---|
+| Lambda ingest-handler | `python -m awslambdaric src.handlers.ingest_handler.handler` | RIC calls handler(event, context) |
+| Lambda aggregator | `python -m awslambdaric src.handlers.aggregator.handler` | RIC calls handler(event, context) |
+| ECS rules-engine | `python -m src.main` | main.py reads MODE=rules_engine → rules_engine.main() |
+| ECS checkov | `python scanner_runner.py` (fargate/Dockerfile CMD) | standalone script |
+
+#### ECR repositories — one per service (loosely coupled, independently deployable)
+
+**Rule: every Lambda and every ECS task has its own ECR repository and Dockerfile.**
+A change to one service rebuilds only that service's image. Others are untouched.
+
+```
+guardrail-ingest-{env}         ← scanner/ingest/Dockerfile
+                                  Deps: boto3 + awslambdaric only
+                                  Used by: ingest-handler Lambda
+
+guardrail-aggregator-{env}     ← scanner/aggregator/Dockerfile
+                                  Deps: boto3 + awslambdaric only
+                                  Used by: aggregator Lambda
+
+guardrail-rules-engine-{env}   ← scanner/rules_engine/Dockerfile
+                                  Deps: boto3 + python-hcl2 + cfn-flip (NO awslambdaric — ECS)
+                                  Used by: rules-engine ECS task
+
+guardrail-checkov-{env}        ← fargate/Dockerfile
+                                  Deps: checkov (~500MB) + boto3
+                                  Used by: checkov ECS task
+
+# Future (Phases 6+):
+guardrail-ai-engine-{env}      ← ai-engine/Dockerfile
+guardrail-api-{env}            ← api/Dockerfile
+```
+
+**Dockerfile locations and build contexts:**
+
+| Service | Dockerfile | Build command |
+|---|---|---|
+| ingest-handler | `scanner/ingest/Dockerfile` | `docker build -f scanner/ingest/Dockerfile scanner/` |
+| aggregator | `scanner/aggregator/Dockerfile` | `docker build -f scanner/aggregator/Dockerfile scanner/` |
+| rules-engine | `scanner/rules_engine/Dockerfile` | `docker build -f scanner/rules_engine/Dockerfile scanner/` |
+| checkov | `fargate/Dockerfile` | `docker build fargate/` |
+
+Build context is `scanner/` for all three scanner services — each Dockerfile does `COPY src/ ./src/`
+to include the shared domain code (models, parsers, adapters, rules, handlers).
+
+#### Python import rules — ALWAYS absolute, NEVER relative
+
+```python
+# ✓ CORRECT — works in Lambda (WORKDIR=/app), ECS, and local pytest
+from src.models.finding import Finding
+from src.parsers.terraform_parser import parse as parse_terraform
+from src.parsers.cloudformation_parser import parse as parse_cloudformation
+
+# ✗ WRONG — .models means src.handlers.models (wrong level), file does not exist there
+from .models.finding import Finding
+
+# ✗ WRONG — fragile, breaks if caller file moves
+from ..models.finding import Finding
+```
+
+Why: WORKDIR is `/app`. Python resolves `src.models.finding` → `/app/src/models/finding.py`. ✓
+Relative imports resolve relative to the file's own package — wrong level for our structure.
+
+#### ECS task handler pattern (rules_engine.py and future ECS handlers)
+
+ECS tasks have NO event dict. They read from environment, do work, exit.
+```python
+def main() -> None:
+    """ECS entry point — called by src.main when MODE=rules_engine."""
+    scan_job_id = os.environ.get("SCAN_JOB_ID")   # injected at RunTask time
+    s3_key      = os.environ.get("S3_KEY")
+    iac_type    = os.environ.get("IAC_TYPE", "terraform")
+    if not scan_job_id or not s3_key:
+        raise SystemExit(1)                         # non-zero exit → failure_handler fires
+    _run_scan(scan_job_id, s3_key, iac_type)        # shared logic with Lambda handler()
+
+def handler(event: dict, context) -> dict:
+    """Lambda handler — kept for unit tests. ECS uses main() above."""
+    detail = event.get("detail", {})
+    _run_scan(detail["scan_job_id"], detail["s3_key"], detail.get("iac_type", "terraform"))
+    return {"statusCode": 200}
+```
+
+#### src/main.py — ECS dispatcher (required in every service image)
+
+```python
+import logging, os, sys
+logging.basicConfig(level=logging.INFO)
+MODE = os.environ.get("MODE", "")
+
+def main():
+    if MODE == "rules_engine":
+        from src.handlers.rules_engine import main as run; run()
+    # add: "report", "email", "failure" as they are implemented in Phases 9+
+    else:
+        logging.error(f"Unknown MODE: {MODE!r}"); sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+#### Build + push commands (one per service — run before first deploy or when deps change)
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+ECR=${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com
+ENV=dev   # change to staging or prod as needed
+
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
+
+# ingest-handler Lambda (boto3 + awslambdaric only)
+docker build -f scanner/ingest/Dockerfile -t guardrail-ingest scanner/
+docker tag guardrail-ingest:latest $ECR/guardrail-ingest-$ENV:$ENV-latest
+docker push $ECR/guardrail-ingest-$ENV:$ENV-latest
+
+# aggregator Lambda (boto3 + awslambdaric only)
+docker build -f scanner/aggregator/Dockerfile -t guardrail-aggregator scanner/
+docker tag guardrail-aggregator:latest $ECR/guardrail-aggregator-$ENV:$ENV-latest
+docker push $ECR/guardrail-aggregator-$ENV:$ENV-latest
+
+# rules-engine ECS task (boto3 + python-hcl2 + cfn-flip)
+docker build -f scanner/rules_engine/Dockerfile -t guardrail-rules-engine scanner/
+docker tag guardrail-rules-engine:latest $ECR/guardrail-rules-engine-$ENV:$ENV-latest
+docker push $ECR/guardrail-rules-engine-$ENV:$ENV-latest
+
+# checkov ECS task (checkov ~500MB — separate image)
+docker build -t guardrail-checkov fargate/
+docker tag guardrail-checkov:latest $ECR/guardrail-checkov-$ENV:$ENV-latest
+docker push $ECR/guardrail-checkov-$ENV:$ENV-latest
+```
+
+**CI/CD deploy trigger (GitHub Actions):** when `scanner/ingest/**` changes → only rebuild
+`guardrail-ingest-{env}`. When `scanner/rules_engine/**` or `scanner/src/**` changes → rebuild
+`guardrail-rules-engine-{env}`. Shared code (`scanner/src/`) changes affect all three scanner images.
+
+**Rules (enforced):**
+- Never `pip install` at container runtime — bake at build time only
+- Always pin versions in requirements.txt: `python-hcl2>=4.3.0`, not `python-hcl2`
+- Push two tags per build: `{env}-{git-sha}` (immutable, used in task defs) and `{env}-latest` (local dev)
+- ECR lifecycle: keep last 10 tagged images, delete untagged after 1 day (set in scanner-stack.ts)
+
+### Secrets vs Plain Environment Variables — Mandatory Pattern
+
+**Rule:** Only two categories of config exist. Never mix them.
+
+```
+SECRETS MANAGER  → values you would NOT want in CloudWatch logs, ECS console, or git history
+                   Examples: email addresses (PII), webhook URLs, API keys, passwords
+                   These would appear in plain text in Lambda env tab in console — unacceptable.
+
+PLAIN ENV VARS   → non-sensitive config: AWS resource names, model IDs, mode flags, URLs
+                   Examples: DynamoDB table name, S3 bucket name, Bedrock model ID, MODE flag
+                   These are AWS resource identifiers — visible in console anyway.
+```
+
+**Why this distinction matters for this project:**
+- Bedrock (LLM): accessed via IAM role — NO API key. Model IDs are plain env vars.
+- DynamoDB (database): accessed via IAM role — NO credentials. Table names are plain env vars.
+- SES email addresses: PII — goes to Secrets Manager.
+- S3, EventBridge, SQS: all IAM — no credentials to store.
+
+**Secret structure (Secrets Manager):**
+
+One secret per environment, JSON format:
+```
+Secret name:  guardrail/{env}/app-secrets
+Secret value: {
+  "ses_from_email": "puneetkumarsingh765@gmail.com",
+  "ses_to_email":   "puneetkumarsingh765@gmail.com"
+}
+```
+Add more keys to this same secret when new secrets arise (e.g., future webhook URLs).
+Never create separate Secrets Manager entries for each individual value — one JSON blob per env.
+
+**CDK pattern — how to wire both types:**
+
+```typescript
+// 1. Import secret (created once in foundation-stack.ts, imported everywhere else)
+const appSecrets = secretsmanager.Secret.fromSecretNameV2(this, "AppSecrets",
+    `guardrail/${env}/app-secrets`);
+
+// 2. Lambda — inject plain env vars directly, secret as ARN only
+const fn = new lambda.DockerImageFunction(this, "EmailHandler", {
+    environment: {
+        // ── Plain env vars (non-sensitive) ──────────────────────────────
+        SCAN_JOBS_TABLE:         scanJobsTable.tableName,
+        FINDINGS_TABLE:          findingsTable.tableName,
+        REPORTS_BUCKET:          reportsBucket.bucketName,
+        CLOUDFRONT_URL:          `https://${distribution.distributionDomainName}`,
+        MODE:                    "email",
+        // ── Secret reference (ARN only — code fetches value at runtime) ──
+        APP_SECRETS_ARN:         appSecrets.secretArn,
+    },
+});
+appSecrets.grantRead(fn);  // IAM permission to call GetSecretValue
+
+// 3. ECS task — same pattern: plain vars in environment, secret ARN in environment
+// (NOT using ECS secrets injection — keep it simple, code reads Secrets Manager directly)
+const taskDef = new ecs.FargateTaskDefinition(this, "RulesEngineTask");
+taskDef.addContainer("scanner", {
+    environment: {
+        // ── Plain env vars ───────────────────────────────────────────────
+        SCAN_JOB_ID:    "",        // injected at RunTask time via overrides
+        FINDINGS_TABLE: findingsTable.tableName,
+        RULES_TABLE:    rulesTable.tableName,
+        UPLOAD_BUCKET:  uploadBucket.bucketName,
+        EVENT_BUS_NAME: eventBus.eventBusName,
+        MODE:           "rules_engine",
+        // ── No secrets needed for rules-engine — IAM handles all AWS access
+    },
+});
+```
+
+**Python pattern — how to read both types at runtime:**
+
+```python
+import json, boto3, os
+from functools import lru_cache
+
+# ── Plain env vars: read at module level (fail-fast if missing) ──────────
+SCAN_JOBS_TABLE  = os.environ["SCAN_JOBS_TABLE"]
+FINDINGS_TABLE   = os.environ["FINDINGS_TABLE"]
+BEDROCK_EXPLAIN_MODEL = os.environ.get("BEDROCK_EXPLAIN_MODEL",
+                                        "anthropic.claude-haiku-4-5-20251001")
+BEDROCK_FIX_MODEL     = os.environ.get("BEDROCK_FIX_MODEL",
+                                        "anthropic.claude-sonnet-4-6")
+MODE = os.environ["MODE"]
+
+# ── Secrets: fetched once at cold start, cached for Lambda lifetime ──────
+@lru_cache(maxsize=1)
+def get_secrets() -> dict:
+    sm = boto3.client("secretsmanager")
+    raw = sm.get_secret_value(SecretId=os.environ["APP_SECRETS_ARN"])
+    return json.loads(raw["SecretString"])
+
+# Usage in email-handler only:
+# secrets = get_secrets()
+# from_email = secrets["ses_from_email"]   → "puneetkumarsingh765@gmail.com"
+# to_email   = secrets["ses_to_email"]     → "puneetkumarsingh765@gmail.com"
+```
+
+**Which functions use Secrets Manager:**
+
+| Function | Needs APP_SECRETS_ARN? | Reason |
+|---|---|---|
+| ingest-handler | No | IAM only — no secrets needed |
+| rules-engine ECS task | No | IAM only — no secrets needed |
+| checkov ECS task | No | IAM only — no secrets needed |
+| aggregator | No | IAM only — no secrets needed |
+| ai-analyzer | No | Bedrock via IAM, model IDs are plain env vars |
+| report-handler | No | S3 + DDB via IAM — no secrets needed |
+| email-handler | **Yes** | SES From/To email addresses are PII |
+| api-handler | No | DDB + S3 via IAM, Cognito validates tokens |
+
+**Never do these:**
+```python
+# ✗ WRONG — hardcoding secret values in code or env vars
+environment={"SES_FROM_EMAIL": "puneetkumarsingh765@gmail.com"}  # visible in console
+
+# ✗ WRONG — creating one Secrets Manager entry per value
+Secret("SesFromEmail", secret_string_value="puneetkumarsingh765@gmail.com")
+Secret("SestoEmail", secret_string_value="puneetkumarsingh765@gmail.com")
+
+# ✓ RIGHT — one JSON secret, ARN injected, code fetches at runtime
+environment={"APP_SECRETS_ARN": appSecrets.secretArn}
+```
 
 ### Python (Lambda functions)
 ```python
@@ -1208,7 +1851,7 @@ const logGroup = new LogGroup(this, "Logs", {
 - CloudWatch log retention: max 7 days for Lambda logs
 - S3 Lifecycle: delete raw uploads after 30 days, move reports to IA after 30 days
 - Fargate tasks: always set `stopTimeout` and max 30-minute hard limit
-- Bedrock: use Haiku by default, Sonnet only when fix code generation is needed
+- Bedrock (app AI engine, NOT Claude Code agents): Haiku 4.5 for explain_risk, Sonnet 4.6 for generate_fix only
 - Lambda memory: right-size (don't set 3008MB for simple functions)
 - S3: always enable Intelligent Tiering on report bucket
 - S3: `versioned: false` and `autoDeleteObjects: true` on ALL buckets — no exceptions
@@ -1318,6 +1961,21 @@ GITHUB ACTIONS — OIDC SETUP (Do Once, Replaces Stored AWS Keys)
 | Shadcn over MUI | UI component library | No license issues, Tailwind-native, professional look |
 | CloudFront OAI | S3 access pattern | Never expose S3 bucket URL directly; OAI forces all traffic through CDK |
 | VPC Endpoints | No NAT Gateway | Eliminates $32/month idle cost; all AWS service calls stay on AWS backbone |
+| Sonnet 4.6 for all Claude Code tasks | Retired Haiku from Claude Code subagent workflow | Haiku produced more errors per task requiring Sonnet re-diagnosis; net token cost was HIGHER than Sonnet one-shot. Haiku still used in Bedrock app engine for explain_risk (different context — app AI, not dev tool) |
+| Docker images for ALL compute | No zip packages, no Lambda layers, no trimming | python-hcl2 + cfn-flip make zip packaging hit-and-trial. Lambda Container Images (up to 10GB from ECR) eliminate this entirely. Same Dockerfile works for Lambda and ECS — consistent deployment pattern across all services. |
+| rules-engine as ECS Fargate task | Not Lambda | (1) Heavy dependencies → Docker solves it. (2) Consistent with Checkov Fargate pattern. (3) Per-file model: one EventBridge event per S3 upload → one ECS RunTask → one scan. No batching needed. ECS gives predictable resources without Lambda cold-start risk on 300s workloads. |
+| SOLID layered architecture | controllers → services → core → adapters/rules | Flat handlers/ dir mixed AWS calls, parsing, and business logic — violates SRP. Layered pattern: new rule = new file in rules/, zero other changes. New parser = new file in adapters/parsers/. Testable: mock adapter interfaces in service tests. |
+| One ECR repo per service (loosely coupled) | Not one shared scanner image | Each Lambda and ECS task has its own ECR repository and Dockerfile. A change in aggregator logic rebuilds only guardrail-aggregator — ingest and rules-engine images are untouched. Independent version history and rollback per service. Each image installs only its own deps: ingest (boto3 + awslambdaric), aggregator (boto3 + awslambdaric), rules-engine (boto3 + hcl2 + cfn-flip — no awslambdaric), checkov (checkov 500MB+). Enterprise microservice pattern: loosely coupled, independently deployable, clearly bounded. |
+| python:3.12-slim for ALL images | Not public.ecr.aws/lambda/python:3.12 (AWS base) | AWS base image is Amazon Linux 2 — fewer apt packages, ENTRYPOINT=/lambda-entrypoint.sh conflicts with ECS usage. Debian slim is smaller, better package compatibility. Lambda compatibility provided by awslambdaric pip package (same RIC that AWS base pre-installs). CDK DockerImageCode.entrypoint must be set to ["/usr/local/bin/python", "-m", "awslambdaric"] for Lambda functions. ECS task CDK entryPoint set to ["python", "-m", "src.main"] — no conflict. |
+| awslambdaric in requirements.txt | Not in Dockerfile RUN directly | awslambdaric is a runtime dependency. Listing it in requirements.txt documents it as part of the contract, ensures it is version-pinned, and keeps the Dockerfile generic. All images pip install -r requirements.txt — awslambdaric gets installed in every build automatically. |
+| Absolute imports always | Not relative imports | WORKDIR is /app. Python resolves src.models.finding → /app/src/models/finding.py correctly. Relative imports (from .models) resolve relative to the handler's own package (src.handlers.models) — wrong level, file does not exist there. Relative imports also break if files move. Absolute imports are robust in Lambda, ECS, and local pytest. |
+| ECS tasks read env vars not event dict | ECS handler has main() not handler(event,context) | Lambda receives an event dict from the service that invokes it. ECS Fargate tasks have no such mechanism — inputs arrive as environment variables injected at RunTask time via containerOverrides. Pattern: main() reads os.environ["SCAN_JOB_ID"] etc., calls shared _run_scan(), exits 0 or non-zero. handler(event,context) kept for unit tests only. |
+| Secrets Manager for PII only; plain env vars for everything else | Clear split: only values unsuitable for console/logs go to Secrets Manager | Bedrock uses IAM (no key). DynamoDB uses IAM (no credentials). Only SES email addresses (PII) go to Secrets Manager. Model IDs, table names, bucket names are plain env vars — they're AWS resource identifiers visible in the console anyway. One JSON secret per env (`guardrail/{env}/app-secrets`), ARN injected as plain env var, code fetches at cold start. |
+| Email-only notifications (no Slack/Teams) | Dropped Slack/Teams from Phase 9 scope | Demo does not require third-party webhook integrations. Email via SES is sufficient: user gets PDF attachment + CRITICAL/HIGH summary in body. Slack/Teams can be added later as a plugin without changing core architecture. |
+| Email body: CRITICAL/HIGH only | No MEDIUM/LOW and no compliant resources in body | Email body must focus attention on what needs action. Including passing resources or low-severity findings dilutes the signal. Full detail (all severities + compliant) is in the PDF attachment only. |
+| No WebSocket in API layer | Removed from Phase 7 scope | Email is the async completion signal. User opens dashboard after receiving email — no real-time push needed. Removes websocket-handler Lambda, ws-connections DDB table, and API GW WebSocket API entirely. Simplifies both backend and frontend significantly. |
+| Static site: S3 + CloudFront | Not bare S3 static website endpoint | S3 website endpoints are HTTP-only; Cognito callback URLs require HTTPS. CloudFront provides HTTPS, caching, OAC for private bucket access, and SPA routing (404 → index.html). The "static website on S3" intent is met — CloudFront is the delivery layer, not a separate hosted service. |
+| Frontend: 2 pages only | ScanListPage + ScanDetailPage (no trend chart page) | The question asks for a Risk Score dashboard to show results. A scan list + detail view directly answers that. Trend charts are nice-to-have but out of scope for the MVP demo. |
 
 ---
 
@@ -1611,49 +2269,79 @@ Every session is evidence of that capability.
 ### MANDATORY ACTIVITY 1 — Prompts Audit Log (prompts.md)
 
 ```
-You are a vibe coding expert hence you have to update prompts.md file after all
-users prompts and steps which it ask you to implement. You have to keep the trace
-of each activity as audit log.
+You are a vibe coding expert. prompts.md is the black-box flight recorder of this build.
+Every user prompt, every decision, every scope correction, every file written must be
+traceable here. This is the proof that skilled AI direction builds production software.
 ```
 
-**OPTIMIZED RULE — ONE ENTRY PER PHASE (not per agent/prompt):**
+prompts.md has TWO entry types. Use the correct one based on session mode.
 
-`prompts.md` is updated EXACTLY ONCE per phase by the **FINAL HOUSEKEEPING AGENT**
-(the last Haiku agent that does git + PR + CLAUDE.md + prompts.md together).
+---
 
-**Why this changed:** The old "one entry per response" rule caused every Haiku subagent
-to append prompts.md as its final step — that was 13 separate Read→Write cycles in Phase 5
-alone, consuming ~1–2 agents worth of tokens purely on logging overhead.
-The audit trail is preserved; the waste is eliminated.
+#### ENTRY TYPE A — Per-Turn Log (Clarification / Scoping / Review sessions)
 
-**What the single phase entry covers:**
-- The user's original request for the phase
-- All files created / modified (list every file)
-- All agents spawned and what each produced
-- Any bugs found and how they were fixed
-- Final outcome: tests passing, coverage %, PR number
+**When to write:** After EVERY response in a session where the user is:
+- Asking questions or requesting explanation
+- Reviewing architecture or design
+- Correcting scope or resolving ambiguity
+- Suggesting improvements or new requirements
+- Reviewing CLAUDE.md for conflicts or gaps
 
-Entry format (one per phase, written by the housekeeping agent):
+**Format (lightweight — append at the end of each response):**
+
+```markdown
+## [YYYY-MM-DD HH:MM] — Clarification: [Topic in 5 words]
+**User Prompt:** <exact intent of what the user asked — one sentence>
+**Action Taken:** <what Claude did — explained / updated CLAUDE.md / fixed conflict / defined scope>
+**Files Changed:** <list CLAUDE.md sections or other files touched, or "none">
+**Scope Impact:** <what changed in the project definition, or "none — clarification only">
+```
+
+**Example:**
+```markdown
+## 2026-06-28 17:30 — Clarification: Scanner should use ECS not Lambda
+**User Prompt:** Why is rules-engine a Lambda when I said ECS task for scanner?
+**Action Taken:** Explained the original decision and agreed it should be ECS. Updated CLAUDE.md:
+                  Lambda Specs table, Phase 5 checklist, KNOWN DECISIONS.
+**Files Changed:** CLAUDE.md — Lambda Specs table, Phase 5 infra, KNOWN DECISIONS
+**Scope Impact:** rules-engine permanently changed from Lambda to ECS Fargate task.
+                  scanner/ Docker image now serves both Lambda functions (ingest, aggregator)
+                  and ECS tasks (rules-engine) via MODE env var.
+```
+
+---
+
+#### ENTRY TYPE B — Per-Phase Log (Implementation sessions)
+
+**When to write:** ONCE, at the END of a phase, in the final housekeeping turn alongside
+git commit + PR creation + CLAUDE.md checklist update. Never mid-phase.
+
+**Why not per-response during implementation:** Phase 5 had 13 subagents each appending
+prompts.md = 13 Read→Write cycles = ~1-2 agents of pure overhead with no value added.
+One comprehensive entry at phase end captures everything with zero waste.
+
+**Format (comprehensive):**
 
 ```markdown
 ## [YYYY-MM-DD HH:MM] — Phase N: [Phase Name]
-**User Request:** <what was asked>
-
-**Agents Spawned:** <count> Haiku agents
-**Files Created:** <list all new files + line counts>
-**Files Modified:** <list all edited files>
-**Bugs Fixed:** <any unplanned fixes + root cause>
+**User Request:** <what was asked to start this phase>
+**Files Created:** <list every new file + line count>
+**Files Modified:** <list every edited file>
+**Bugs Fixed:** <each bug: root cause in one line>
 **Tests:** <X passed, Y% coverage>
 **PR:** #<number> → dev
-
 **Outcome:** DONE | IN-PROGRESS | BLOCKED
 ```
 
-Rules:
-- The log is append-only — never edit or delete past entries
-- This is the primary evidence artifact for the vibe coding demonstration
-- If `prompts.md` does not exist, the housekeeping agent creates it
-- Individual Haiku agents MUST NOT append to prompts.md — only the housekeeping agent does
+---
+
+**Rules applying to both entry types:**
+- prompts.md is append-only — never edit or delete past entries
+- This file IS the vibe coding demonstration — every decision traceable from day one
+- If prompts.md does not exist, create it on the first write
+- Sonnet 4.6 writes all entries inline — no subagents touch this file
+- Type A entries: written at the END of the current response before any other closing text
+- Type B entries: written as part of the housekeeping checklist (step 6 of 9)
 
 ### MANDATORY ACTIVITY 2 — Phase Decision Enforcement
 
@@ -1677,210 +2365,157 @@ flight recorder for this build.
 
 ## TOKEN EFFICIENCY PROTOCOL — ALWAYS ACTIVE
 
-**Budget target: every phase completes within 3% of a 5-hour session and 0.5% of weekly limit.**
+**Budget target: every phase completes with minimum errors and retries.**
 
-This protocol is mandatory in every session, every response. It defines which model does what.
-Sonnet (the main conversation model) acts as the brain — judgment only.
-Haiku (subagents via Agent tool, `model="haiku"`) acts as the hands — all execution.
+**WHY HAIKU WAS RETIRED (2026-06-28):** Haiku produced more errors per task than Sonnet 4.6,
+causing retries, re-tests, and debug cycles that consumed MORE total tokens than Sonnet's
+higher per-token cost. ECR image push failures, import path bugs, and test coverage misses
+all required Sonnet diagnosis anyway. Net result: Haiku cost MORE in token-hours than Sonnet
+would have in one-shot execution. Haiku is permanently retired from this project's Claude Code
+workflow. All subagents use Sonnet 4.6.
 
----
+**NOTE: This protocol governs CLAUDE CODE SUBAGENTS only (the development tool).
+The Bedrock AI engine INSIDE the app (Phase 6+) continues to route:
+  - explain_risk → Claude Haiku 4.5 (high volume, quality is sufficient, $0.014/scan)
+  - generate_fix → Claude Sonnet 4.6 (precision required for valid IaC output)
+These are two different contexts. Do not confuse them.**
 
-### SONNET DOES EXACTLY THESE 5 THINGS — NOTHING ELSE
-
-```
-1. SESSION START  : Read CLAUDE.md once → produce the Micro-Task List (see format below)
-2. TASK SPEC      : Write precise specs for each Haiku task (function sigs, exact logic, file path)
-3. DIAGNOSIS      : When Haiku reports a failure summary → decide the fix (one specific instruction)
-4. APPROVAL       : Review Haiku's result summary (< 200 words) → approve or give one correction
-5. FINAL SIGN-OFF : Confirm phase acceptance criteria are met based on Haiku's reported evidence
-```
-
-Sonnet never runs bash commands. Never reads files for verification. Never runs git or AWS CLI.
-Every tool call that touches the filesystem or network is delegated to Haiku.
-Sonnet ≤ 5 turns per phase. If a 6th turn is needed, something is wrong — diagnose why.
+This protocol is mandatory in every session, every response.
+Sonnet 4.6 is the ONLY model used for Claude Code execution — both brain AND hands.
 
 ---
 
-### HAIKU DOES EVERYTHING ELSE
-
-Haiku handles ALL of these — no exceptions:
+### SONNET 4.6 DOES EVERYTHING — ALL TASKS INLINE
 
 ```
-FILE OPERATIONS    : Read files, Write files, Edit files, Glob, Grep
-SHELL COMMANDS     : All Bash/PowerShell — git add, git commit, git push, git status, git diff
-AWS CLI            : aws dynamodb, aws s3, aws ssm, aws cloudformation, aws lambda, aws sts
-CDK COMMANDS       : npx cdk synth, npx cdk deploy, npx cdk diff
-TEST RUNNER        : pytest, npm test, npm run build, vitest
-CI DATA COLLECTION : gh pr checks, gh run view --log-failed (fetch the log, extract only the error)
-LINTING            : cfn-lint, tfsec, checkov
-NPM                : npm ci, npm install, npm run build
-HOUSEKEEPING AGENT : (FINAL agent only) git add/commit/push + gh pr create +
-                     CLAUDE.md checklist [x] + SESSION TRACKER + prompts.md entry
-                     ALL FIVE of these tasks run in ONE agent — never split them
+Sonnet 4.6 handles all of these directly — NO subagents, NO Agent tool spawning:
+
+FILE OPERATIONS    : Read, Write, Edit, Glob, Grep — use dedicated tools directly
+SHELL COMMANDS     : Bash/PowerShell — git, aws CLI, cdk, pytest, npm — run directly
+DIAGNOSIS          : Read the failing file + test output → identify root cause inline
+FIX + VERIFY       : Edit the file → run pytest → confirm pass — all in one turn
+HOUSEKEEPING       : git add/commit/push + gh pr create + CLAUDE.md + prompts.md
+                     done directly by Sonnet in the final turn of each phase
+
+Agent tool: BANNED for this project. Zero subagent spawning. Every step runs inline.
+WHY: Each Agent spawn costs ~20K tokens of overhead before doing any real work.
+     Sequential inline execution is both faster and cheaper for a build-phase project.
 ```
 
-⚠ INDIVIDUAL HAIKU AGENTS MUST NOT touch prompts.md or CLAUDE.md.
-   Those are exclusively owned by the final housekeeping agent.
+**One-shot rule:** Every task must be completed correctly in ONE attempt.
+Read the full context before writing. Run tests before committing. No "I'll fix it next."
+
+**Sequential rule:** All work proceeds one step at a time in a defined order.
+No parallel subagent groups. No "spawn A and B simultaneously." Step N+1 starts only
+after step N is confirmed complete. This is a build project, not a search project —
+correctness of sequence matters more than wall-clock speed.
 
 ---
 
-### MICRO-TASK LIST FORMAT (Sonnet produces this at session start)
+### TASK EXECUTION ORDER (every phase follows this — strictly sequential)
 
 ```
 PHASE N — [Phase Name]
-Sonnet budget: ≤ 5 turns | Haiku tasks: [count] | Independent groups: [A, B, C]
+All steps run in order. No parallel subagents. No skipping steps.
 
-PARALLEL GROUP A (spawn all at once — no dependencies between them):
-  H1. [WRITE|EDIT|READ|RUN] path/or/command
-      Spec: [exact function signature / exact command / exact old→new string]
-      Must: [specific correctness constraint]
-      Must not: [what to avoid]
+STEP 1 — Write source file 1 (inline, Sonnet does it directly)
+STEP 2 — Write source file 2
+STEP 3 — Write source file 3
+  ... (one file per step, read → write → confirm before moving on)
 
-  H2. [WRITE|EDIT|READ|RUN] path/or/command
-      Spec: ...
+STEP N-2 — Write all test files (after all source files exist)
+STEP N-1 — RUN: pytest [module] --cov=src --cov-fail-under=70
+            If fails → diagnose root cause inline → edit → re-run → confirm pass
+            Do NOT move to next step until tests pass.
+STEP N   — HOUSEKEEPING:
+            git add → commit → push → gh pr create → CLAUDE.md → prompts.md
+```
 
-SEQUENTIAL (run after Group A completes):
-  H3. RUN: git add [files] && git commit -m "[message]" && git push
-  H4. RUN: gh pr create --base dev ...
-  H5. RUN: gh pr checks [num] --watch
+**Within a single step, parallel tool calls are allowed** (e.g., two independent Read
+calls to gather context before writing). But each logical STEP completes fully before
+the next step begins. Never write file 2 before file 1 is confirmed correct.
 
-SONNET REVIEW GATE (Haiku sends summary, Sonnet approves or corrects):
-  - H1 result: [what Haiku reports about the file it wrote]
-  - H3 result: [commit hash + push confirmation]
-  - H5 result: [pass/fail per check]
+---
+
+### DIAGNOSE-AND-FIX PATTERN (inline — no subagents)
+
+When a test or command fails:
+```
+Step 1: Read the error output (already in context from the Bash tool result)
+Step 2: Identify root cause in one sentence
+Step 3: Edit the file to fix it
+Step 4: Re-run the failing test/command in the same response
+Step 5: If pass → continue. If fail again → one more cycle. After 2 cycles, stop and report.
+
+DO NOT: spawn a "diagnostic agent" then a "fix agent" — that costs 2× agent overhead
+DO NOT: commit code that hasn't passed tests locally
 ```
 
 ---
 
-### HAIKU SPAWN FORMAT (copy-paste ready)
+### HOUSEKEEPING CHECKLIST (final turn of every phase)
 
-```python
-Agent(
-  subagent_type="claude",
-  model="haiku",
-  description="[3-word task description]",
-  prompt="""
-TASK: [WRITE FILE | EDIT FILE | RUN COMMAND | READ AND REPORT | DIAGNOSE AND FIX]
+Run these in order at the end of every phase. All inline, no subagent needed.
 
-[For WRITE FILE:]
-File: [absolute path]
-Content requirements (implement exactly — no extras):
-  - [function sig + logic in 1-2 lines]
-  - [imports needed]
-  - [return type and shape]
-  - [edge cases to handle]
-Project rules:
-  - Python: logger.info(json.dumps({...})) — never print()
-  - Python: os.environ["VAR"] at module top — KeyError = fail fast
-  - CDK TypeScript: RemovalPolicy always DESTROY, env suffix on all names
-  - No comments unless non-obvious WHY
-  - No extra error handling for impossible cases
-  - DO NOT touch prompts.md or CLAUDE.md — housekeeping agent handles those
-Write the complete file. Report: filename + line count + key function names.
-
-[For RUN COMMAND:]
-Run: [exact command]
-Report back: [what output matters — exit code, specific line from output, etc.]
-DO NOT touch prompts.md or CLAUDE.md.
-
-[For READ AND REPORT:]
-Read: [file path, lines N-M if known]
-Report back: [exactly what Sonnet needs to make a decision — keep under 100 words]
-
-[For CI FAILURE:]
-Run: gh run view [run-id] --log-failed
-Extract: only lines containing ERROR, FAILED, ImportError, or the test function name
-Report: the error type + the exact failing line + filename:linenum
-Do NOT paste the full log.
-
-[For DIAGNOSE AND FIX — use this instead of separate diagnostic + fix agents:]
-Step 1: Read the failing file (lines X-Y) AND the test output
-Step 2: Identify root cause (one sentence)
-Step 3: Apply the fix (edit the file)
-Step 4: Run pytest [specific test] to verify fix works
-Report: root cause + what changed + test result (pass/fail)
-DO NOT spawn a diagnostic-only agent first — diagnose and fix in one agent.
-"""
-)
 ```
+1. git add [list every modified file explicitly — never git add -A or git add .]
+2. git commit -m "[conventional commit message]
 
----
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+3. git push -u origin feature/phase-N-[name]
+4. gh pr create --base dev --title "[title]" --body "$(cat <<'EOF'
+   ## Summary
+   - [bullet 1]
+   - [bullet 2]
 
-### FINAL HOUSEKEEPING AGENT (one agent, runs last in every phase)
+   ## Test Plan
+   - [ ] pytest passes with ≥70% coverage
+   - [ ] acceptance criteria verified
 
-This is the ONLY agent that touches `prompts.md` and `CLAUDE.md`. It runs ONCE after all
-code agents complete and tests pass. It combines five tasks that previously cost 2-3 separate agents.
+   🤖 Generated with Claude Code
+   EOF
+   )"
+5. Edit CLAUDE.md:
+   - Phase N checklist: change [ ] → [x] for completed items
+   - SESSION TRACKER: update "What Was Completed" + "NEXT SESSION"
+   - Prepend entry to Session Log
+6. Append to prompts.md (ONE entry for the whole phase):
 
-```python
-Agent(
-  subagent_type="claude",
-  model="haiku",
-  description="Phase N housekeeping",
-  prompt="""
-TASK: PHASE HOUSEKEEPING (git + PR + CLAUDE.md + prompts.md — all in one pass)
+   ## [YYYY-MM-DD HH:MM] — Phase N: [Phase Name]
+   **User Request:** [what was asked]
+   **Files Created:** [list + line counts]
+   **Files Modified:** [list]
+   **Bugs Fixed:** [root cause in one line each]
+   **Tests:** [X passed, Y% coverage]
+   **PR:** #[number] → dev
+   **Outcome:** DONE
 
-Working directory: d:\\AWS\\AWS_account_projects
-Branch: feature/phase-N-[name]
+7. git add CLAUDE.md prompts.md
+8. git commit -m "docs: Phase N checklist + audit log
 
-STEP 1 — Git commit all phase files:
-  git add [list every new/modified file explicitly — never git add -A]
-  git commit -m "[conventional commit message]
-
-  Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-  git push -u origin feature/phase-N-[name]
-
-STEP 2 — Create PR:
-  gh pr create --base dev --title "[title]" --body "[body with Summary + Test Plan]"
-
-STEP 3 — Update CLAUDE.md:
-  Edit d:\\AWS\\AWS_account_projects\\CLAUDE.md:
-  - In PHASE N checklist: change [ ] → [x] for all completed items
-  - In ## SESSION TRACKER: update "What Was Completed" and "NEXT SESSION" sections
-  - Prepend new entry to Session Log
-
-STEP 4 — Append to prompts.md (ONE entry covering the entire phase):
-  Append to d:\\AWS\\AWS_account_projects\\prompts.md:
-
-  ## [YYYY-MM-DD HH:MM] — Phase N: [Phase Name]
-  **User Request:** [what the user asked]
-  **Agents Spawned:** [count] Haiku agents (list: H1=task, H2=task, ...)
-  **Files Created:** [every new file + line count]
-  **Files Modified:** [every edited file]
-  **Bugs Fixed:** [any unplanned fixes — root cause in one line each]
-  **Tests:** [X passed, Y% coverage, --cov-fail-under=Z: PASSED/FAILED]
-  **PR:** #[number] → dev
-  **Outcome:** DONE
-
-STEP 5 — Stage and commit the CLAUDE.md + prompts.md changes together:
-  git add CLAUDE.md prompts.md
-  git commit -m "docs: Phase N checklist + audit log
-
-  Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-  git push
-
-Report: PR URL + commit hashes for both commits.
-"""
-)
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+9. git push
 ```
 
 ---
 
 ### CI FAILURE TRIAGE PROTOCOL
 
-When a CI check fails, this is the exact sequence — no deviation:
+When a CI check fails:
 
 ```
-Step 1 (Haiku): gh run view [run-id] --log-failed | grep -A 10 "ERROR\|FAILED\|Error\|assert"
-                Report to Sonnet: error type + file + line number (under 50 words)
+Step 1: gh run view [run-id] --log-failed
+        Grep output for ERROR, FAILED, ImportError — extract only the 5-10 relevant lines
 
-Step 2 (Sonnet): Diagnose root cause from the summary → produce ONE specific fix instruction
+Step 2: Diagnose root cause inline (one sentence)
 
-Step 3 (Haiku): Implement the fix (edit file / run command) → commit → push
-                Report: what changed + new commit hash
+Step 3: Edit the file to fix it → git add → git commit → git push
+        Report: what changed + new commit hash
 
-Step 4 (Haiku): gh pr checks [num] --watch → report final pass/fail per check
+Step 4: gh pr checks [pr-number] --watch → confirm pass/fail
 
-Repeat only if still failing. Maximum 3 triage cycles before escalating to Sonnet for deeper read.
+Maximum 3 triage cycles. If still failing after 3 cycles, read the full log and report
+the blocker to the user before proceeding.
 ```
 
 ---
@@ -1888,30 +2523,61 @@ Repeat only if still failing. Maximum 3 triage cycles before escalating to Sonne
 ### WHAT DEGRADES PERFORMANCE — NEVER DO THESE
 
 ```
-✗ Sonnet reads a file "to understand it" before delegating — give Haiku the spec instead
-✗ Sonnet re-reads a file after editing — trust the edit, only re-read if CI proves it wrong
-✗ Haiku spawns further subagents — Haiku only uses direct tools (Bash, Read, Edit, Write)
-✗ Sequential Haiku spawns for independent tasks — spawn parallel groups in one message
-✗ Sonnet watches CI output directly — Haiku watches, Sonnet only sees the summary
-✗ Haiku makes architectural decisions — if it hits ambiguity, it reports to Sonnet, doesn't guess
-✗ Pasting full CI logs to Sonnet — grep first, paste only the relevant 5-10 lines
+✗ Spawning ANY subagent via the Agent tool — banned entirely for this project
+  WHY: ~20K tokens overhead per spawn before doing real work; sequential inline is cheaper
+✗ Parallel subagent groups ("spawn A and B at once") — banned even with Sonnet model
+  WHY: This is a build project. Sequence integrity > wall-clock speed. Step N+1 must
+       only start after step N is confirmed correct — parallel agents break this guarantee
+✗ Using model="haiku" for ANY Claude Code subagent — Haiku is retired from this workflow
+  WHY: Haiku errors + retries cost more total tokens than Sonnet one-shot execution
+✗ Spawning a diagnostic-only agent then a separate fix agent — diagnose+fix in one turn
+✗ Committing before tests pass — always run pytest locally before git commit
 ✗ Running cdk synth more than once per phase unless a CDK .ts file changed
-✗ Running pytest on the full repo when only one module changed
+✗ Running pytest on the full repo when only one module changed — scope to the module
 
-TOKEN WASTE — LEARNED FROM PHASE 5 (added 2026-06-28):
+TOKEN WASTE — LEARNED FROM PHASES 5 (added 2026-06-28):
 ✗ Each agent appending prompts.md — costs 1 Read + 1 Write per agent = ~13× in Phase 5
-  FIX: housekeeping agent writes prompts.md once at the end
+  FIX: Sonnet appends prompts.md once inline at the end of the phase
 ✗ Splitting CLAUDE.md update + git into 2 agents — costs 163K tokens for pure overhead
-  FIX: housekeeping agent does both in one pass (Steps 3–5 of housekeeping template)
-✗ Spawning a diagnostic-only agent then a separate fix agent — costs 2× agent overhead
-  FIX: use "DIAGNOSE AND FIX" task type — read, diagnose, fix, verify all in one agent
+  FIX: housekeeping done in ONE final Sonnet turn (Steps 1–9 of checklist above)
+✗ Haiku making errors that require Sonnet diagnosis anyway — net loss vs. Sonnet directly
+  FIX: Sonnet 4.6 for everything. Retired Haiku from Claude Code workflow entirely.
 ✗ Writing integration tests that use @mock_aws with pre-created module-level boto3 clients
   FIX: always patch module-level clients directly (patch.object(module.s3_client, "get_object"))
   WHY: moto @mock_aws does not retroactively intercept clients created at import time
 ✗ Setting test coverage target without accounting for it in initial test specs
   FIX: count lines in each file before writing tests; design test suite to hit 70%+ upfront
-✗ Launching a "coverage fix" agent after tests already ran — costs 80K tokens
-  FIX: write coverage-aware tests on first pass; include CFN + IAM + ENC paths in initial suite
+✗ ECR image not present when Lambda or ECS task runs — image pull error at invocation
+  FIX: build + push BOTH images before deploying or testing any compute
+       See Docker Image Standards → "Build + push commands" for the exact commands
+       Two images needed: guardrail-scanner-dev (scanner/) AND guardrail-checkov-dev (fargate/)
+
+✗ Using lambda.Function with runtime=PYTHON_3_12 and code=fromAsset() — ZIP deployment
+  FIX: ALWAYS use lambda.DockerImageFunction with DockerImageCode.fromEcr()
+  WHY: python-hcl2 + cfn-flip make ZIP packaging hit-and-trial. lambda.Code.fromAsset() is banned.
+
+✗ Using AWS Lambda base image public.ecr.aws/lambda/python:3.12
+  FIX: Use python:3.12-slim + awslambdaric>=2.0.0 in requirements.txt
+  WHY: AWS base ENTRYPOINT=/lambda-entrypoint.sh conflicts with ECS entryPoint override.
+       Amazon Linux 2 has fewer apt packages. python:3.12-slim with awslambdaric is equivalent.
+
+✗ Omitting entrypoint from DockerImageCode.fromEcr() when using python:3.12-slim
+  FIX: Always set entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"] in fromEcr()
+  WHY: AWS base image bakes this in; slim image does not. Missing entrypoint = Lambda failure.
+
+✗ Using relative imports in scanner code (from .models or from ..parsers)
+  FIX: Always absolute: from src.models.finding import Finding
+  WHY: from .models resolves to src.handlers.models — that path does not exist.
+       WORKDIR=/app makes absolute imports unambiguous in all execution contexts.
+
+✗ Writing ECS task handler as handler(event, context) reading from event dict
+  FIX: ECS entry point must be main() reading os.environ["SCAN_JOB_ID"] etc.
+  WHY: ECS has no event dict — inputs arrive via RunTask containerOverrides as env vars.
+
+✗ NAT Gateway auto-created by ECS cluster when no VPC is specified in CDK
+  FIX: Create explicit VPC: new ec2.Vpc(this, "Vpc", { natGateways: 0, subnetConfiguration: [PUBLIC] })
+       Use assignPublicIp: true + subnetSelection PUBLIC on EcsTask targets in EventBridge rules
+  WHY: CDK default VPC creates private subnets + 2 NAT gateways = $64/month idle cost.
 ```
 
 ---
@@ -1920,22 +2586,23 @@ TOKEN WASTE — LEARNED FROM PHASE 5 (added 2026-06-28):
 
 ```
 Start the next phase using the TOKEN EFFICIENCY PROTOCOL in CLAUDE.md.
-Read SESSION TRACKER → produce the Micro-Task List → delegate all execution to Haiku.
-Sonnet: plan + diagnose only. Haiku: all files, commands, git, CI.
-FINAL HOUSEKEEPING AGENT (last): git + PR + CLAUDE.md + prompts.md in ONE agent.
-Phase must complete within 3% session / 0.5% weekly.
+Read SESSION TRACKER → produce the sequential task list → execute ALL steps inline.
+Rules:
+  - No Agent tool. No subagents. Sonnet 4.6 does everything directly.
+  - One step at a time. Confirm each step before starting the next.
+  - Tests must pass locally before any git commit.
+  - Diagnose+fix inline when tests fail — never defer to a later step.
+FINAL STEP: git + PR + CLAUDE.md + prompts.md all in one inline pass.
 ```
 
-### PHASE AGENT BUDGET (target per phase)
+### PHASE EXECUTION BUDGET (target per phase)
 
-To stay within 3% session budget, plan for this agent count:
-
-| Phase size | Files | Tests | Target agents |
+| Phase size | Files | Tests | Target turns |
 |---|---|---|---|
-| Small  | 1-3 files | <10 tests | 3 code + 1 housekeeping = 4 total |
-| Medium | 4-7 files | 10-20 tests | 4 code + 1 housekeeping = 5 total |
-| Large  | 8-13 files | 20-35 tests | 5-6 code + 1 housekeeping = 6-7 total |
+| Small  | 1-3 files | <10 tests | 2-3 turns total (write → test+fix → housekeeping) |
+| Medium | 4-7 files | 10-20 tests | 3-4 turns total |
+| Large  | 8-13 files | 20-35 tests | 4-5 turns total |
 
-Phase 5 used 14 agents (target was 6). 8 extra agents = 8× the planned overhead.
-The 3 unplanned agents (diagnose, fix, coverage) + 2 extra housekeeping agents = 5 of the 8 extra.
-Better test specs + DIAGNOSE-AND-FIX pattern + single housekeeping agent eliminates all 5.
+Each "turn" = one Sonnet response with multiple parallel tool calls.
+Phase 5 took 14 agent spawns. With inline Sonnet execution: 4-5 turns maximum.
+The savings come from eliminating agent-spawn overhead (~20K tokens each) and Haiku error cycles.

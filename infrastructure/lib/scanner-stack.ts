@@ -1,5 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as events from "aws-cdk-lib/aws-events";
@@ -22,16 +23,33 @@ interface ScannerStackProps extends cdk.StackProps {
   eventBus: events.EventBus;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ECR REPO STRATEGY: One repo per service (loose coupling, independent deploys)
+//   guardrail-ingest-{env}        ← Lambda: ingest-handler  (boto3 only)
+//   guardrail-aggregator-{env}    ← Lambda: aggregator       (boto3 only)
+//   guardrail-rules-engine-{env}  ← ECS:    rules-engine     (boto3 + hcl2 + cfn-flip)
+//   guardrail-checkov-{env}       ← ECS:    checkov          (checkov ~500MB, separate)
+//
+// Each service is built and pushed independently. A change in aggregator logic
+// only rebuilds guardrail-aggregator — ingest and rules-engine images are untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class ScannerStack extends cdk.Stack {
-  public readonly ingestHandlerFn: lambda.Function;
-  public readonly rulesEngineFn: lambda.Function;
-  public readonly aggregatorFn: lambda.Function;
+  public readonly ingestHandlerFn: lambda.DockerImageFunction;
+  public readonly aggregatorFn: lambda.DockerImageFunction;
   public readonly checkovResultsQueue: sqs.Queue;
+
+  // Expose ECR repo URIs so CI/CD (GitHub Actions) can push images
+  public readonly ingestEcrRepo: ecr.Repository;
+  public readonly aggregatorEcrRepo: ecr.Repository;
+  public readonly rulesEngineEcrRepo: ecr.Repository;
+  public readonly checkovEcrRepo: ecr.Repository;
 
   constructor(scope: Construct, id: string, props: ScannerStackProps) {
     super(scope, id, props);
 
     const env = this.node.tryGetContext("env") ?? "dev";
+    const removalPolicy = cdk.RemovalPolicy.DESTROY;
 
     const commonTags = {
       Project: "SecurityGuardrailAuditor",
@@ -40,7 +58,73 @@ export class ScannerStack extends cdk.Stack {
       CostCenter: "demo-portfolio",
     };
 
-    const removalPolicy = cdk.RemovalPolicy.DESTROY;
+    // ── ECR lifecycle rules (applied to all repos) ───────────────────────────
+    const ecrLifecycle: ecr.LifecycleRule[] = [
+      { maxImageCount: 10, description: "Keep last 10 tagged images" },
+      {
+        maxImageAge: cdk.Duration.days(1),
+        tagStatus: ecr.TagStatus.UNTAGGED,
+        description: "Delete untagged images after 1 day",
+      },
+    ];
+
+    const ecrDefaults = {
+      encryptionKey: props.kmsKey,
+      imageScanOnPush: true,
+      removalPolicy,
+      emptyOnDelete: true,
+      lifecycleRules: ecrLifecycle,
+    };
+
+    // ── ECR: ingest-handler Lambda ───────────────────────────────────────────
+    // Deps: boto3 + awslambdaric only — no parser libs
+    // Dockerfile: scanner/ingest/Dockerfile (build context: scanner/)
+    this.ingestEcrRepo = new ecr.Repository(this, "IngestRepo", {
+      repositoryName: `guardrail-ingest-${env}`,
+      ...ecrDefaults,
+    });
+
+    // ── ECR: aggregator Lambda ───────────────────────────────────────────────
+    // Deps: boto3 + awslambdaric only — SQS consume + DDB write
+    // Dockerfile: scanner/aggregator/Dockerfile (build context: scanner/)
+    this.aggregatorEcrRepo = new ecr.Repository(this, "AggregatorRepo", {
+      repositoryName: `guardrail-aggregator-${env}`,
+      ...ecrDefaults,
+    });
+
+    // ── ECR: rules-engine ECS task ───────────────────────────────────────────
+    // Deps: boto3 + python-hcl2 + cfn-flip — heavier image (parser libs)
+    // Dockerfile: scanner/rules_engine/Dockerfile (build context: scanner/)
+    this.rulesEngineEcrRepo = new ecr.Repository(this, "RulesEngineRepo", {
+      repositoryName: `guardrail-rules-engine-${env}`,
+      ...ecrDefaults,
+    });
+
+    // ── ECR: checkov ECS task ────────────────────────────────────────────────
+    // Deps: checkov (~500MB) + boto3 — kept separate to avoid bloating scanner images
+    // Dockerfile: fargate/Dockerfile (build context: fargate/)
+    this.checkovEcrRepo = new ecr.Repository(this, "CheckovRepo", {
+      repositoryName: `guardrail-checkov-${env}`,
+      ...ecrDefaults,
+    });
+
+    // ── SSM: ECR URIs for CI/CD pipelines ───────────────────────────────────
+    new ssm.StringParameter(this, "IngestEcrUriParam", {
+      parameterName: `/guardrail/${env}/ecr-ingest-uri`,
+      stringValue: this.ingestEcrRepo.repositoryUri,
+    });
+    new ssm.StringParameter(this, "AggregatorEcrUriParam", {
+      parameterName: `/guardrail/${env}/ecr-aggregator-uri`,
+      stringValue: this.aggregatorEcrRepo.repositoryUri,
+    });
+    new ssm.StringParameter(this, "RulesEngineEcrUriParam", {
+      parameterName: `/guardrail/${env}/ecr-rules-engine-uri`,
+      stringValue: this.rulesEngineEcrRepo.repositoryUri,
+    });
+    new ssm.StringParameter(this, "CheckovEcrUriParam", {
+      parameterName: `/guardrail/${env}/ecr-checkov-uri`,
+      stringValue: this.checkovEcrRepo.repositoryUri,
+    });
 
     // ── Dead-letter queue ────────────────────────────────────────────────────
     const checkovDlq = new sqs.Queue(this, "CheckovDlq", {
@@ -60,7 +144,12 @@ export class ScannerStack extends cdk.Stack {
       removalPolicy,
     });
 
-    // ── Base Lambda execution role ───────────────────────────────────────────
+    new ssm.StringParameter(this, "CheckovQueueUrlParam", {
+      parameterName: `/guardrail/${env}/checkov-queue-url`,
+      stringValue: this.checkovResultsQueue.queueUrl,
+    });
+
+    // ── Lambda execution role (shared by ingest + aggregator) ────────────────
     const lambdaRole = new iam.Role(this, "ScannerLambdaRole", {
       roleName: `guardrail-scanner-lambda-role-${env}`,
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
@@ -77,6 +166,10 @@ export class ScannerStack extends cdk.Stack {
     props.rulesCatalogTable.grantReadData(lambdaRole);
     props.uploadBucket.grantRead(lambdaRole);
     props.eventBus.grantPutEventsTo(lambdaRole);
+    this.checkovResultsQueue.grantConsumeMessages(lambdaRole);
+    // Each Lambda pulls from its own ECR repo
+    this.ingestEcrRepo.grantPull(lambdaRole);
+    this.aggregatorEcrRepo.grantPull(lambdaRole);
 
     lambdaRole.addToPolicy(
       new iam.PolicyStatement({
@@ -85,7 +178,6 @@ export class ScannerStack extends cdk.Stack {
       })
     );
 
-    // EVENT_BUS_NAME points to the CUSTOM guardrail bus so Lambda publishes there.
     const commonLambdaEnv: Record<string, string> = {
       SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
       FINDINGS_TABLE: props.findingsTable.tableName,
@@ -93,52 +185,45 @@ export class ScannerStack extends cdk.Stack {
       UPLOAD_BUCKET: props.uploadBucket.bucketName,
       EVENT_BUS_NAME: props.eventBus.eventBusName,
       CHECKOV_QUEUE_URL: this.checkovResultsQueue.queueUrl,
-      POWERTOOLS_SERVICE_NAME: "guardrail-scanner",
       LOG_LEVEL: "INFO",
     };
 
     // ── Lambda: ingest-handler ───────────────────────────────────────────────
-    this.ingestHandlerFn = new lambda.Function(this, "IngestHandler", {
-      functionName: `guardrail-ingest-handler-${env}`,
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "handlers.ingest_handler.handler",
-      code: lambda.Code.fromAsset("../scanner"),
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(30),
-      role: lambdaRole,
-      environment: commonLambdaEnv,
-      tracing: lambda.Tracing.ACTIVE,
-      logGroup: new logs.LogGroup(this, "IngestHandlerLogs", {
-        logGroupName: `/guardrail/${env}/lambda/ingest-handler`,
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy,
-      }),
-    });
-
-    // ── Lambda: rules-engine ─────────────────────────────────────────────────
-    this.rulesEngineFn = new lambda.Function(this, "RulesEngine", {
-      functionName: `guardrail-rules-engine-${env}`,
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "handlers.rules_engine.handler",
-      code: lambda.Code.fromAsset("../scanner"),
-      memorySize: 512,
-      timeout: cdk.Duration.seconds(300),
-      role: lambdaRole,
-      environment: commonLambdaEnv,
-      tracing: lambda.Tracing.ACTIVE,
-      logGroup: new logs.LogGroup(this, "RulesEngineLogs", {
-        logGroupName: `/guardrail/${env}/lambda/rules-engine`,
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy,
-      }),
-    });
+    // Image: guardrail-ingest-{env} ECR repo
+    // entrypoint + cmd: awslambdaric calls ingest_handler.handler(event, context)
+    this.ingestHandlerFn = new lambda.DockerImageFunction(
+      this,
+      "IngestHandler",
+      {
+        functionName: `guardrail-ingest-handler-${env}`,
+        code: lambda.DockerImageCode.fromEcr(this.ingestEcrRepo, {
+          tagOrDigest: `${env}-latest`,
+          entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
+          cmd: ["src.handlers.ingest_handler.handler"],
+        }),
+        memorySize: 256,
+        timeout: cdk.Duration.seconds(30),
+        role: lambdaRole,
+        environment: commonLambdaEnv,
+        tracing: lambda.Tracing.ACTIVE,
+        logGroup: new logs.LogGroup(this, "IngestHandlerLogs", {
+          logGroupName: `/guardrail/${env}/lambda/ingest-handler`,
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy,
+        }),
+      }
+    );
 
     // ── Lambda: aggregator ───────────────────────────────────────────────────
-    this.aggregatorFn = new lambda.Function(this, "Aggregator", {
+    // Image: guardrail-aggregator-{env} ECR repo
+    // Triggered by SQS guardrail-checkov-results queue
+    this.aggregatorFn = new lambda.DockerImageFunction(this, "Aggregator", {
       functionName: `guardrail-aggregator-${env}`,
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: "handlers.aggregator.handler",
-      code: lambda.Code.fromAsset("../scanner"),
+      code: lambda.DockerImageCode.fromEcr(this.aggregatorEcrRepo, {
+        tagOrDigest: `${env}-latest`,
+        entrypoint: ["/usr/local/bin/python", "-m", "awslambdaric"],
+        cmd: ["src.handlers.aggregator.handler"],
+      }),
       memorySize: 256,
       timeout: cdk.Duration.seconds(60),
       role: lambdaRole,
@@ -151,76 +236,150 @@ export class ScannerStack extends cdk.Stack {
       }),
     });
 
-    // Aggregator triggered by SQS checkov-results queue
     this.aggregatorFn.addEventSource(
       new SqsEventSource(this.checkovResultsQueue, { batchSize: 10 })
     );
-    this.checkovResultsQueue.grantConsumeMessages(lambdaRole);
 
-    // ── ECR repository for Fargate scanner image ─────────────────────────────
-    const ecrRepo = new ecr.Repository(this, "ScannerRepo", {
-      repositoryName: `guardrail-scanner-${env}`,
-      encryptionKey: props.kmsKey,
-      imageScanOnPush: true,
-      removalPolicy,
-      emptyOnDelete: true,
+    // ── VPC: public subnets only, zero NAT gateways ($0 idle cost) ───────────
+    // Fargate tasks use assignPublicIp:true to reach ECR/S3 via internet.
+    // Phase 11 adds VPC endpoints to remove internet dependency (still zero NAT).
+    const vpc = new ec2.Vpc(this, "ScannerVpc", {
+      vpcName: `guardrail-vpc-${env}`,
+      maxAzs: 2,
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: "public",
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+      ],
     });
 
     // ── ECS Cluster ──────────────────────────────────────────────────────────
     const cluster = new ecs.Cluster(this, "ScannerCluster", {
       clusterName: `guardrail-cluster-${env}`,
+      vpc,
       containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
 
-    // ── Fargate task role ────────────────────────────────────────────────────
+    // ── Fargate task role (shared by rules-engine + checkov) ─────────────────
     const fargateTaskRole = new iam.Role(this, "FargateTaskRole", {
       roleName: `guardrail-fargate-task-role-${env}`,
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
     });
 
     props.uploadBucket.grantRead(fargateTaskRole);
+    props.findingsTable.grantReadWriteData(fargateTaskRole);
+    props.scanJobsTable.grantReadWriteData(fargateTaskRole);
+    props.rulesCatalogTable.grantReadData(fargateTaskRole);
+    props.eventBus.grantPutEventsTo(fargateTaskRole);
     this.checkovResultsQueue.grantSendMessages(fargateTaskRole);
     props.kmsKey.grantEncryptDecrypt(fargateTaskRole);
+    // Each ECS task pulls only from its own repo
+    this.rulesEngineEcrRepo.grantPull(fargateTaskRole);
+    this.checkovEcrRepo.grantPull(fargateTaskRole);
 
     fargateTaskRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-        resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:/guardrail/*`],
+        resources: [
+          `arn:aws:logs:${this.region}:${this.account}:log-group:/guardrail/*`,
+        ],
       })
     );
 
-    // ── Fargate task definition ───────────────────────────────────────────────
-    const taskDef = new ecs.FargateTaskDefinition(this, "CheckovTaskDef", {
-      family: `guardrail-checkov-${env}`,
-      cpu: 256,
-      memoryLimitMiB: 512,
-      taskRole: fargateTaskRole,
-    });
+    // ── ECS task definition: rules-engine ────────────────────────────────────
+    // Image: guardrail-rules-engine-{env} ECR repo
+    // 0.5 vCPU / 1 GB — python-hcl2 + cfn-flip are memory-hungry
+    // SCAN_JOB_ID, S3_KEY, IAC_TYPE injected per-invocation via RunTask overrides
+    const rulesEngineTaskDef = new ecs.FargateTaskDefinition(
+      this,
+      "RulesEngineTaskDef",
+      {
+        family: `guardrail-rules-engine-${env}`,
+        cpu: 512,
+        memoryLimitMiB: 1024,
+        taskRole: fargateTaskRole,
+      }
+    );
 
-    const fargateLogGroup = new logs.LogGroup(this, "FargateLogs", {
-      logGroupName: `/guardrail/${env}/fargate/checkov`,
+    const rulesEngineLogGroup = new logs.LogGroup(this, "RulesEngineLogs", {
+      logGroupName: `/guardrail/${env}/ecs/rules-engine`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy,
     });
 
-    taskDef.addContainer("checkov-scanner", {
-      image: ecs.ContainerImage.fromEcrRepository(ecrRepo, `${env}-latest`),
+    rulesEngineTaskDef.addContainer("rules-engine", {
+      containerName: "rules-engine",
+      image: ecs.ContainerImage.fromEcrRepository(
+        this.rulesEngineEcrRepo,
+        `${env}-latest`
+      ),
+      // ECS does not use Lambda RIC — run src.main directly.
+      // src/main.py reads MODE=rules_engine → dispatches to rules_engine.main()
+      entryPoint: ["python", "-m", "src.main"],
       logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: "checkov",
-        logGroup: fargateLogGroup,
+        streamPrefix: "rules-engine",
+        logGroup: rulesEngineLogGroup,
       }),
       environment: {
-        SQS_QUEUE_URL: this.checkovResultsQueue.queueUrl,
+        FINDINGS_TABLE: props.findingsTable.tableName,
+        RULES_TABLE: props.rulesCatalogTable.tableName,
+        UPLOAD_BUCKET: props.uploadBucket.bucketName,
+        EVENT_BUS_NAME: props.eventBus.eventBusName,
+        SCAN_JOBS_TABLE: props.scanJobsTable.tableName,
+        MODE: "rules_engine",
         AWS_DEFAULT_REGION: this.region,
+        // SCAN_JOB_ID, S3_KEY, IAC_TYPE injected per-invocation via RunTask overrides
       },
       stopTimeout: cdk.Duration.seconds(30),
     });
 
-    // ── EventBridge: S3 ObjectCreated → ingest-handler ───────────────────────
-    // S3 sends ObjectCreated events to the DEFAULT event bus (not a custom bus),
-    // so this rule must be on the default bus. The ingest-handler then publishes
-    // ScanRequested onto the CUSTOM guardrail bus (props.eventBus).
-    const defaultBus = events.EventBus.fromEventBusName(this, "DefaultBus", "default");
+    // ── ECS task definition: checkov ─────────────────────────────────────────
+    // Image: guardrail-checkov-{env} ECR repo (500MB+ — kept separate)
+    // SCAN_JOB_ID, S3_BUCKET, S3_KEY injected per-invocation via RunTask overrides
+    const checkovTaskDef = new ecs.FargateTaskDefinition(
+      this,
+      "CheckovTaskDef",
+      {
+        family: `guardrail-checkov-${env}`,
+        cpu: 256,
+        memoryLimitMiB: 512,
+        taskRole: fargateTaskRole,
+      }
+    );
+
+    const checkovLogGroup = new logs.LogGroup(this, "CheckovLogs", {
+      logGroupName: `/guardrail/${env}/ecs/checkov`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy,
+    });
+
+    checkovTaskDef.addContainer("checkov-scanner", {
+      containerName: "checkov-scanner",
+      image: ecs.ContainerImage.fromEcrRepository(
+        this.checkovEcrRepo,
+        `${env}-latest`
+      ),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "checkov",
+        logGroup: checkovLogGroup,
+      }),
+      environment: {
+        SQS_QUEUE_URL: this.checkovResultsQueue.queueUrl,
+        AWS_DEFAULT_REGION: this.region,
+        // SCAN_JOB_ID, S3_BUCKET, S3_KEY injected via RunTask overrides
+      },
+      stopTimeout: cdk.Duration.seconds(30),
+    });
+
+    // ── EventBridge: S3 ObjectCreated → ingest-handler Lambda ───────────────
+    const defaultBus = events.EventBus.fromEventBusName(
+      this,
+      "DefaultBus",
+      "default"
+    );
     new events.Rule(this, "S3UploadRule", {
       ruleName: `guardrail-s3-upload-${env}`,
       eventBus: defaultBus,
@@ -234,8 +393,8 @@ export class ScannerStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(this.ingestHandlerFn)],
     });
 
-    // ── EventBridge: ScanRequested → rules-engine + Fargate ──────────────────
-    // guardrail events are published onto the CUSTOM bus by ingest-handler.
+    // ── EventBridge: ScanRequested → rules-engine + checkov (parallel) ───────
+    // Both fire from the same event on the CUSTOM guardrail bus.
     const scanRequestedRule = new events.Rule(this, "ScanRequestedRule", {
       ruleName: `guardrail-scan-requested-${env}`,
       eventBus: props.eventBus,
@@ -245,14 +404,42 @@ export class ScannerStack extends cdk.Stack {
       },
     });
 
-    scanRequestedRule.addTarget(new targets.LambdaFunction(this.rulesEngineFn));
+    scanRequestedRule.addTarget(
+      new targets.EcsTask({
+        cluster,
+        taskDefinition: rulesEngineTaskDef,
+        launchType: ecs.LaunchType.FARGATE,
+        assignPublicIp: true,
+        subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
+        containerOverrides: [
+          {
+            containerName: "rules-engine",
+            environment: [
+              {
+                name: "SCAN_JOB_ID",
+                value: events.EventField.fromPath("$.detail.scan_job_id"),
+              },
+              {
+                name: "S3_KEY",
+                value: events.EventField.fromPath("$.detail.s3_key"),
+              },
+              {
+                name: "IAC_TYPE",
+                value: events.EventField.fromPath("$.detail.iac_type"),
+              },
+            ],
+          },
+        ],
+      })
+    );
 
     scanRequestedRule.addTarget(
       new targets.EcsTask({
         cluster,
-        taskDefinition: taskDef,
+        taskDefinition: checkovTaskDef,
         launchType: ecs.LaunchType.FARGATE,
-        assignPublicIp: false,
+        assignPublicIp: true,
+        subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
         containerOverrides: [
           {
             containerName: "checkov-scanner",
@@ -274,17 +461,6 @@ export class ScannerStack extends cdk.Stack {
         ],
       })
     );
-
-    // ── SSM outputs ───────────────────────────────────────────────────────────
-    new ssm.StringParameter(this, "CheckovQueueUrlParam", {
-      parameterName: `/guardrail/${env}/checkov-queue-url`,
-      stringValue: this.checkovResultsQueue.queueUrl,
-    });
-
-    new ssm.StringParameter(this, "EcrRepoUriParam", {
-      parameterName: `/guardrail/${env}/ecr-repo-uri`,
-      stringValue: ecrRepo.repositoryUri,
-    });
 
     // ── Tags ──────────────────────────────────────────────────────────────────
     Object.entries(commonTags).forEach(([k, v]) => cdk.Tags.of(this).add(k, v));

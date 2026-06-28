@@ -1,15 +1,16 @@
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Key as DdbKey, Attr
 
-from scanner.src.models.finding import Finding
-from scanner.src.parsers.terraform_parser import parse as parse_terraform
-from scanner.src.parsers.cloudformation_parser import parse as parse_cloudformation
+from src.models.finding import Finding
+from src.parsers.terraform_parser import parse as parse_terraform
+from src.parsers.cloudformation_parser import parse as parse_cloudformation
 
 # Environment variables — fail fast at module load
 SCAN_JOBS_TABLE = os.environ["SCAN_JOBS_TABLE"]
@@ -26,141 +27,107 @@ s3_client = boto3.client("s3")
 events_client = boto3.client("events")
 
 
+def main() -> None:
+    """
+    ECS Fargate entry point — called by src.main when MODE=rules_engine.
+    Reads SCAN_JOB_ID, S3_KEY, IAC_TYPE from environment (injected at RunTask time).
+    Exits 0 on success, non-zero on failure (triggers failure_handler via ECS TaskStopped event).
+    """
+    scan_job_id = os.environ.get("SCAN_JOB_ID")
+    s3_key = os.environ.get("S3_KEY")
+    s3_bucket = os.environ.get("S3_BUCKET", UPLOAD_BUCKET)
+    iac_type = os.environ.get("IAC_TYPE", "terraform")
+
+    if not scan_job_id or not s3_key:
+        logger.error(json.dumps({
+            "event": "missing_required_env_vars",
+            "SCAN_JOB_ID": scan_job_id,
+            "S3_KEY": s3_key,
+        }))
+        raise SystemExit(1)
+
+    _run_scan(scan_job_id, s3_key, s3_bucket, iac_type)
+
+
+def _run_scan(scan_job_id: str, s3_key: str, s3_bucket: str, iac_type: str) -> None:
+    """Core scan logic — shared by ECS main() and Lambda handler()."""
+    logger.info(json.dumps({
+        "event": "rules_engine_started",
+        "scan_job_id": scan_job_id,
+        "s3_key": s3_key,
+        "iac_type": iac_type,
+    }))
+
+    _update_scan_status(scan_job_id, "SCANNING")
+
+    rules_table = dynamodb.Table(RULES_TABLE)
+    rules_response = rules_table.scan(FilterExpression=Attr("enabled").eq(True))
+    rules = rules_response.get("Items", [])
+    logger.info(json.dumps({
+        "event": "rules_loaded",
+        "scan_job_id": scan_job_id,
+        "rule_count": len(rules),
+    }))
+
+    s3_response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+    file_content = s3_response["Body"].read()
+    logger.info(json.dumps({
+        "event": "file_downloaded",
+        "scan_job_id": scan_job_id,
+        "file_size_bytes": len(file_content),
+    }))
+
+    if iac_type == "terraform":
+        resources = parse_terraform(file_content)
+        findings = _apply_terraform_rules(resources, rules, scan_job_id)
+    else:
+        resources = parse_cloudformation(file_content)
+        findings = _apply_cloudformation_rules(resources, rules, scan_job_id)
+
+    logger.info(json.dumps({
+        "event": "iac_parsed",
+        "scan_job_id": scan_job_id,
+        "resource_count": sum(len(v) for v in resources.values()),
+        "finding_count": len(findings),
+    }))
+
+    findings_table = dynamodb.Table(FINDINGS_TABLE)
+    for finding in findings:
+        findings_table.put_item(Item=finding.to_dynamodb_item())
+
+    events_client.put_events(Entries=[{
+        "Source": "guardrail",
+        "DetailType": "RulesEngineDone",
+        "EventBusName": EVENT_BUS_NAME,
+        "Detail": json.dumps({
+            "scan_job_id": scan_job_id,
+            "finding_count": len(findings),
+        }),
+    }])
+    logger.info(json.dumps({
+        "event": "rules_engine_complete",
+        "scan_job_id": scan_job_id,
+        "finding_count": len(findings),
+    }))
+
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """
-    Lambda handler triggered by EventBridge ScanRequested event.
-    Parses IaC file, applies custom security rules, writes findings to DynamoDB.
-    """
+    """Lambda handler — kept for tests. Production uses ECS main() entry point."""
     try:
-        # Extract event details
         detail = event.get("detail", {})
-        scan_job_id = detail.get("scan_job_id")
-        s3_key = detail.get("s3_key")
-        s3_bucket = detail.get("s3_bucket", UPLOAD_BUCKET)
-        iac_type = detail.get("iac_type", "terraform")
-
-        logger.info(
-            json.dumps(
-                {
-                    "event": "rules_engine_started",
-                    "scan_job_id": scan_job_id,
-                    "s3_key": s3_key,
-                    "iac_type": iac_type,
-                }
-            )
+        _run_scan(
+            scan_job_id=detail.get("scan_job_id"),
+            s3_key=detail.get("s3_key"),
+            s3_bucket=detail.get("s3_bucket", UPLOAD_BUCKET),
+            iac_type=detail.get("iac_type", "terraform"),
         )
-
-        # Update scan-jobs status to SCANNING
-        _update_scan_status(scan_job_id, "SCANNING")
-
-        # Load enabled rules from rules catalog
-        rules_table = dynamodb.Table(RULES_TABLE)
-        rules_response = rules_table.scan(FilterExpression=Attr("enabled").eq(True))
-        rules = rules_response.get("Items", [])
-        logger.info(
-            json.dumps(
-                {
-                    "event": "rules_loaded",
-                    "scan_job_id": scan_job_id,
-                    "rule_count": len(rules),
-                }
-            )
-        )
-
-        # Download IaC file from S3
-        s3_response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
-        file_content = s3_response["Body"].read()
-        logger.info(
-            json.dumps(
-                {
-                    "event": "file_downloaded",
-                    "scan_job_id": scan_job_id,
-                    "file_size_bytes": len(file_content),
-                }
-            )
-        )
-
-        # Parse IaC file
-        if iac_type == "terraform":
-            resources = parse_terraform(file_content)
-            findings = _apply_terraform_rules(resources, rules, scan_job_id)
-        else:  # cloudformation
-            resources = parse_cloudformation(file_content)
-            findings = _apply_cloudformation_rules(resources, rules, scan_job_id)
-
-        logger.info(
-            json.dumps(
-                {
-                    "event": "iac_parsed",
-                    "scan_job_id": scan_job_id,
-                    "resource_count": sum(len(v) for v in resources.values()),
-                    "finding_count": len(findings),
-                }
-            )
-        )
-
-        # Write findings to DynamoDB
-        findings_table = dynamodb.Table(FINDINGS_TABLE)
-        for finding in findings:
-            item = finding.to_dynamodb_item()
-            findings_table.put_item(Item=item)
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "finding_written",
-                        "scan_job_id": scan_job_id,
-                        "rule_id": finding.rule_id,
-                        "severity": finding.severity,
-                    }
-                )
-            )
-
-        # Publish RulesEngineDone event
-        events_client.put_events(
-            Entries=[
-                {
-                    "Source": "guardrail",
-                    "DetailType": "RulesEngineDone",
-                    "EventBusName": EVENT_BUS_NAME,
-                    "Detail": json.dumps(
-                        {
-                            "scan_job_id": scan_job_id,
-                            "finding_count": len(findings),
-                        }
-                    ),
-                }
-            ]
-        )
-        logger.info(
-            json.dumps(
-                {
-                    "event": "rules_engine_complete",
-                    "scan_job_id": scan_job_id,
-                    "finding_count": len(findings),
-                }
-            )
-        )
-
-        return {
-            "statusCode": 200,
-            "body": json.dumps(
-                {
-                    "scan_job_id": scan_job_id,
-                    "finding_count": len(findings),
-                }
-            ),
-        }
-
+        return {"statusCode": 200}
     except Exception as e:
-        logger.error(
-            json.dumps(
-                {
-                    "event": "rules_engine_failed",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                }
-            )
-        )
+        logger.error(json.dumps({
+            "event": "rules_engine_failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+        }))
         raise
 
 

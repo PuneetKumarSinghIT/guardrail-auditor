@@ -83,6 +83,11 @@ export class FoundationStack extends cdk.Stack {
       removalPolicy,
       autoDeleteObjects: true,
     });
+
+    // Enable S3 ObjectCreated events to EventBridge (eventBridgeEnabled: true is sufficient)
+    // The S3 bucket automatically publishes ObjectCreated events to EventBridge
+    // No manual notification config needed — just the flag above
+
     ssmParam(this, 'UploadsBucketParam', `/guardrail/${env}/bucket-iac-uploads`, this.uploadsBucket.bucketName);
 
     // 2. scan-reports — generated PDF reports; tiered for cost savings
