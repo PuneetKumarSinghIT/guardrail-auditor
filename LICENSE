@@ -1,0 +1,82 @@
+Enterprise Security Guardrail Auditor
+Source-Available License
+
+Copyright (c) 2026 Puneet Kumar Singh. All rights reserved.
+
+This software, including its source code, documentation, and associated assets
+(the "Software"), is the personal work and intellectual property of Puneet Kumar
+Singh (the "Author"). It is made publicly viewable for portfolio, educational,
+and evaluation purposes. This is NOT an open-source license, and all rights not
+expressly granted below are reserved by the Author.
+
+-------------------------------------------------------------------------------
+1. PERMISSIONS — You are allowed to:
+-------------------------------------------------------------------------------
+   a) View, read, and study the source code.
+   b) Fork the repository and run the Software for personal, educational,
+      non-commercial, and evaluation purposes.
+   c) Build upon, learn from, and experiment with your own fork or copy, provided
+      that this license and the copyright notice are retained and that clear
+      attribution to the Author is given.
+
+-------------------------------------------------------------------------------
+2. RESTRICTIONS — You may NOT:
+-------------------------------------------------------------------------------
+   a) Modify, alter, or submit changes to the Author's original repository
+      without the Author's explicit prior written permission. (Your own fork is
+      yours to experiment with; the canonical repository remains the Author's.)
+   b) Redistribute, republish, sublicense, sell, or otherwise commercialize the
+      Software, in original or modified form, as your own work.
+   c) Remove, obscure, or alter any copyright, authorship, or attribution notice.
+   d) Use the Software, the Author's name, or the project name to imply
+      endorsement, sponsorship, or affiliation without written permission.
+   e) Use the Software for any unlawful, harmful, or malicious purpose.
+
+-------------------------------------------------------------------------------
+3. OWNERSHIP
+-------------------------------------------------------------------------------
+   The Software remains the sole property of the Author. This license grants a
+   limited permission to view and use as described above; it transfers no
+   ownership or intellectual-property rights.
+
+-------------------------------------------------------------------------------
+4. USE AT YOUR OWN RISK
+-------------------------------------------------------------------------------
+   Any use of the Software — including viewing, forking, running, deploying, or
+   building upon it — is undertaken entirely at your own risk and responsibility.
+   You alone are responsible for the consequences of your use, including but not
+   limited to any AWS or third-party costs incurred, security outcomes, data
+   loss, or damages of any kind.
+
+-------------------------------------------------------------------------------
+5. NO WARRANTY
+-------------------------------------------------------------------------------
+   THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY
+   KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT.
+
+-------------------------------------------------------------------------------
+6. LIMITATION OF LIABILITY AND MISUSE
+-------------------------------------------------------------------------------
+   IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, LOSSES, COSTS,
+   OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+   ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+   The Author bears no responsibility whatsoever for any misuse of the Software
+   by any person or party. If the Software is misused, modified, or deployed in a
+   harmful, negligent, or unlawful manner by anyone other than the Author, sole
+   responsibility and liability rests with the party who committed that act, and
+   in no way with the Author.
+
+-------------------------------------------------------------------------------
+7. GRANTS BEYOND THIS LICENSE
+-------------------------------------------------------------------------------
+   For any use beyond the permissions above — including commercial licensing,
+   redistribution rights, or contributing to the original project — please
+   contact the Author:
+
+   Puneet Kumar Singh — puneetkumarsingh765@gmail.com
+
+By viewing, forking, or otherwise using the Software, you acknowledge that you
+have read, understood, and agreed to the terms of this license.

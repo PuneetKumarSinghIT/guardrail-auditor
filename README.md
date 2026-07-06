@@ -1,10 +1,25 @@
 # Enterprise Security Guardrail Auditor
 
+An AI-powered, fully serverless platform that scans Infrastructure-as-Code for security
+misconfigurations, explains each risk in plain English, and generates the corrected code —
+end-to-end in about a minute, for near-zero cost at idle.
+
 [![AWS CDK](https://img.shields.io/badge/IaC-AWS_CDK_v2-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/cdk/)
 [![Python](https://img.shields.io/badge/Backend-Python_3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/Frontend-React_18_+_TypeScript-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Amazon Bedrock](https://img.shields.io/badge/AI-Amazon_Bedrock_(Claude)-232F3E?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
 [![Serverless](https://img.shields.io/badge/Architecture-Serverless_($0_idle)-6f42c1)](#cost)
+[![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub_Actions_(OIDC)-2088FF?logo=githubactions&logoColor=white)](#engineering-quality)
+[![License](https://img.shields.io/badge/License-Source--Available-blue)](LICENSE)
+
+---
+
+### At a glance
+
+| | | | |
+|---|---|---|---|
+| **8** CDK stacks | **80** automated tests | **86.87%** backend coverage | **20+** custom rules |
+| **7** Lambda functions | **2** Fargate scan tasks | **~60–90s** end-to-end scan | **< $5/mo** idle cost |
 
 > Upload an Infrastructure-as-Code file. Get back a prioritised risk report —
 > in plain English, with the exact fix, and a PDF in your inbox — in about a
@@ -21,8 +36,8 @@ security misconfigurations before they ever reach AWS. It runs two scan layers
 generate the corrected IaC. You get a visual Risk Score dashboard, an emailed
 PDF report, and a one-click fix for every critical issue.
 
-It is built as a portfolio demonstration of an enterprise-grade, AI-powered,
-event-driven serverless system on AWS.
+It is a production-grade, enterprise-patterned system: event-driven, secure by
+default, fully observable, cost-engineered, and reproducible from a single command.
 
 ---
 
@@ -34,6 +49,26 @@ event-driven serverless system on AWS.
 - **Risk Score dashboard** — a single 0–100 score with colour-coded severity (green → amber → red → dark red), a sortable findings table, and a slide-in AI drawer.
 - **Emailed PDF report** — a full report (all severities + compliant resources) lands in your inbox on completion, with a CRITICAL/HIGH summary in the body.
 - **Serverless & event-driven** — no servers, no NAT gateway, no database to manage. ~$0 at idle.
+
+---
+
+## Skills demonstrated
+
+This project was built to demonstrate the end-to-end skill set of a cloud / AI /
+platform engineer who can own a system from architecture to production operations.
+
+| Area | Demonstrated by |
+|---|---|
+| **Generative AI integration** | Amazon Bedrock (Claude) for risk explanation + code generation, prompt engineering, cost-aware model routing (Haiku for volume, Sonnet for precision), retry/backoff handling |
+| **Serverless & event-driven architecture** | Lambda + Fargate + EventBridge + SQS choreography; every hop is an event, zero idle compute |
+| **Infrastructure as Code** | 8 AWS CDK (TypeScript) stacks synthesising to CloudFormation; reproducible one-command build and teardown |
+| **CI/CD & DevOps** | GitHub Actions with OIDC (no stored keys), multi-environment dev → staging → prod flow with approval gates, containerised deployments to ECR |
+| **Cloud security** | Least-privilege IAM, KMS encryption, Cognito JWT auth, Secrets Manager, SigV4 presigned URLs — the system passes its own scanner cleanly |
+| **Cost engineering** | Serverless-first design delivering < $5/month idle; no NAT/RDS/EC2; documented cost model |
+| **Software design** | SOLID layered architecture (controllers → services → core → adapters), Open/Closed rule engine, dependency injection |
+| **Testing & quality** | 80 automated tests, 86.87% backend coverage, static analysis (cfn-lint, tfsec, Checkov) on every PR |
+| **Observability & operations** | CloudWatch dashboards + alarms, X-Ray distributed tracing, dead-letter queues, automated failure notifications |
+| **Full-stack delivery** | React 18 + TypeScript SPA, REST API design, presigned-URL uploads, real-time status polling |
 
 ---
 
@@ -93,6 +128,29 @@ Every hop is an EventBridge event; every compute unit is a container image from 
   KMS bucket** (`HTTP 400 … require AWS Signature Version 4`). The API's boto3 S3 client is
   pinned to `signature_version="s3v4"` so both the browser **upload** (presigned PUT) and
   the **PDF download** (presigned GET, with `Content-Disposition: attachment`) work.
+
+---
+
+## Engineering quality
+
+Quality is treated as a first-class requirement, not an afterthought.
+
+- **Automated testing** — 80 tests (74 Python unit/integration tests using `pytest` + `moto`
+  for AWS mocking, plus 6 frontend tests with Vitest), holding **86.87% backend coverage**.
+  A minimum coverage gate blocks merges below threshold.
+- **Static security & lint gates on every PR** — `pytest`, `cfn-lint`, `tfsec`, and `Checkov`
+  all run automatically via GitHub Actions; any failure blocks the merge.
+- **Self-auditing infrastructure** — the project's own CDK output is scanned with Checkov
+  against a documented accepted-risk baseline (`381 pass / 0 unaccepted findings`). The
+  platform passes the same security bar it enforces on its users.
+- **SOLID layered architecture** — a strict `controllers → services → core → adapters/rules`
+  layering. Adding a new security rule or IaC parser is a new file with zero changes to
+  existing code (Open/Closed principle).
+- **Secure by default** — least-privilege IAM per function, KMS encryption at rest, Cognito
+  JWT authentication on every API route, secrets isolated in Secrets Manager, and SigV4
+  presigned URLs. No long-lived credentials anywhere (CI uses GitHub OIDC).
+- **Operational maturity** — X-Ray tracing on every Lambda, CloudWatch dashboards and alarms,
+  dead-letter queues with automated failure emails, and a one-command teardown to a $0 account.
 
 ---
 
@@ -291,7 +349,7 @@ above) with a CRITICAL/HIGH summary and the PDF attached.
 
 ## Demo lifecycle
 
-The demo can sleep between client calls and wake the night before:
+The platform can sleep between sessions and wake on demand to minimise cost:
 
 ```bash
 python scripts/demo_wake.py   --env dev   # re-enable delivery + seed sample scans
@@ -303,13 +361,12 @@ python scripts/billing_check.py           # current month spend, grouped by serv
 
 ## Tear down / deprovision
 
-When the demo is over, you have **two options** depending on whether you'll need it
-again:
+When you're done, you have **two options** depending on whether you'll need it again:
 
 | Goal | Use | Effect |
 |---|---|---|
-| **Pause** between demos, bring it back later | `python scripts/demo_sleep.py --env dev` | Minimises idle cost; resources stay (re-wake with `demo_wake.py`). |
-| **Fully remove** everything (end of engagement) | `cdk destroy --all` (below) | Deletes every AWS resource → **$0, empty account**. |
+| **Pause** between sessions, bring it back later | `python scripts/demo_sleep.py --env dev` | Minimises idle cost; resources stay (re-wake with `demo_wake.py`). |
+| **Fully remove** everything | `cdk destroy --all` (below) | Deletes every AWS resource → **$0, empty account**. |
 
 ### Full deprovision — one command, $0 after
 
@@ -381,4 +438,19 @@ plus the generated, corrected IaC block for CRITICAL/HIGH findings.
 
 ---
 
-_Built by Puneet Kumar Singh as an enterprise AWS portfolio project._
+## License
+
+This project is released under a **[Source-Available License](LICENSE)** — it is the
+personal work of Puneet Kumar Singh, shared publicly for portfolio, educational, and
+evaluation purposes. You are welcome to **view, study, and fork** it and to build on
+your own copy with attribution. You may **not** modify the canonical repository,
+redistribute or sell it as your own, or remove the authorship notices. The Software is
+provided "as is", with **no warranty**, and any use is entirely **at your own risk** —
+the Author is not liable for any misuse. See the [LICENSE](LICENSE) for full terms, or
+contact the Author for commercial or extended-use permissions.
+
+---
+
+_Designed and built by **Puneet Kumar Singh** — an enterprise-grade, AI-powered AWS
+platform showcasing end-to-end cloud, serverless, and generative-AI engineering.
+Open to AI / Cloud / Platform Engineering roles._
